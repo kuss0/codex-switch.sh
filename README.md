@@ -102,27 +102,34 @@ cx
 
 ## 非交互安装
 
-可以通过环境变量直接创建 profile：
+可以通过环境变量直接创建 profile。为了避免 token 进入 shell 历史，推荐从文件读取 token：
 
 ```bash
+read -rsp "Token: " CODEX_TOKEN
+printf '\n'
+printf '%s\n' "$CODEX_TOKEN" > /tmp/codex-token
+chmod 600 /tmp/codex-token
+
 CODEX_SWITCH_PROFILE=proxy1 \
 CODEX_SWITCH_BASE_URL=https://your-proxy.example/v1 \
 CODEX_SWITCH_MODEL=gpt-5.5 \
 CODEX_SWITCH_WIRE_API=responses \
-CODEX_SWITCH_TOKEN='你的 token' \
+CODEX_SWITCH_TOKEN_FILE=/tmp/codex-token \
 bash install.sh
 ```
 
-远程一键非交互：
+远程一键非交互时，同样先准备 `/tmp/codex-token`，再执行：
 
 ```bash
 CODEX_SWITCH_PROFILE=proxy1 \
 CODEX_SWITCH_BASE_URL=https://your-proxy.example/v1 \
 CODEX_SWITCH_MODEL=gpt-5.5 \
 CODEX_SWITCH_WIRE_API=responses \
-CODEX_SWITCH_TOKEN='你的 token' \
+CODEX_SWITCH_TOKEN_FILE=/tmp/codex-token \
 bash <(curl -fsSL https://raw.githubusercontent.com/kuss0/codex-switch.sh/main/install.sh)
 ```
+
+`CODEX_SWITCH_TOKEN='...'` 也支持，但只建议在 CI、临时容器或不会落入历史记录的环境里使用。
 
 ## 文件位置
 

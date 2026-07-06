@@ -20,11 +20,13 @@ prompt() {
   local prompt_text var_name
   prompt_text="$1"
   var_name="$2"
+  local -n target="$var_name"
 
   if [ -t 0 ]; then
-    read -r -p "$prompt_text" "$var_name"
+    read -r -p "$prompt_text" target
   else
-    read -r -p "$prompt_text" "$var_name" </dev/tty
+    # shellcheck disable=SC2034
+    read -r -p "$prompt_text" target </dev/tty
   fi
 }
 
@@ -109,9 +111,19 @@ install_codex() {
 }
 
 install_switcher() {
-  local script_dir local_switch tmp
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
-  local_switch="$script_dir/codex-switch.sh"
+  local script_source script_dir local_switch tmp
+  script_source="${BASH_SOURCE[0]:-}"
+  local_switch=""
+
+  if [ -n "$script_source" ] && [ -f "$script_source" ]; then
+    case "$script_source" in
+      /dev/*|/proc/*) ;;
+      *)
+        script_dir="$(cd "$(dirname "$script_source")" >/dev/null 2>&1 && pwd -P)"
+        local_switch="$script_dir/codex-switch.sh"
+        ;;
+    esac
+  fi
 
   mkdir -p "$CODEX_HOME" "$BIN_DIR"
   chmod 700 "$CODEX_HOME" 2>/dev/null || true

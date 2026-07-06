@@ -2,6 +2,7 @@
 
 if [ -z "${BASH_VERSION:-}" ]; then
   echo "codex-switch requires bash." >&2
+  # shellcheck disable=SC2317
   return 1 2>/dev/null || exit 1
 fi
 
@@ -47,11 +48,13 @@ cs_read() {
   local prompt var_name
   prompt="$1"
   var_name="$2"
+  local -n target="$var_name"
 
   if [ -t 0 ]; then
-    read -r -p "$prompt" "$var_name"
+    read -r -p "$prompt" target
   else
-    read -r -p "$prompt" "$var_name" </dev/tty
+    # shellcheck disable=SC2034
+    read -r -p "$prompt" target </dev/tty
   fi
 }
 
@@ -59,18 +62,29 @@ cs_read_secret() {
   local prompt var_name
   prompt="$1"
   var_name="$2"
+  local -n target="$var_name"
 
   if [ -t 0 ]; then
-    read -r -s -p "$prompt" "$var_name"
+    read -r -s -p "$prompt" target
     echo
   else
-    read -r -s -p "$prompt" "$var_name" </dev/tty
+    # shellcheck disable=SC2034
+    read -r -s -p "$prompt" target </dev/tty
     printf '\n' >/dev/tty
   fi
 }
 
 cs_is_valid_name() {
   [[ "${1:-}" =~ ^[A-Za-z0-9_-]+$ ]]
+}
+
+cs_invalid_profile() {
+  echo "Error: Invalid profile name: $1" >&2
+  return 2
+}
+
+cs_validate_profile() {
+  cs_is_valid_name "$1" || { cs_invalid_profile "$1"; return 2; }
 }
 
 cs_provider_id() {
@@ -102,10 +116,13 @@ cs_secret_file() {
 }
 
 cs_current_name() {
-  local file
+  local file name
   file="$(cs_current_file)"
   [ -f "$file" ] || return 1
-  sed -n '1p' "$file"
+  IFS= read -r name < "$file" || return 1
+  [ -n "$name" ] || return 1
+  cs_validate_profile "$name" || return "$?"
+  printf '%s\n' "$name"
 }
 
 cs_ensure_dirs() {
@@ -120,11 +137,17 @@ cs_add() {
 
   name="${1:-${CODEX_SWITCH_PROFILE:-}}"
   if [ -z "$name" ]; then
-    cs_can_prompt || cs_die "Profile name is required. Set CODEX_SWITCH_PROFILE or run interactively."
+    if ! cs_can_prompt; then
+      cs_die "Profile name is required. Set CODEX_SWITCH_PROFILE or run interactively."
+      return 1
+    fi
     cs_read "Profile name: " name
   fi
 
-  cs_is_valid_name "$name" || cs_die "Profile name can only contain letters, numbers, hyphens, and underscores."
+  if ! cs_is_valid_name "$name"; then
+    cs_die "Profile name can only contain letters, numbers, hyphens, and underscores."
+    return 2
+  fi
 
   profile_file="$(cs_profile_file "$name")"
   secret_file="$(cs_secret_file "$name")"
@@ -148,6 +171,14 @@ cs_add() {
   wire_api="${wire_api:-responses}"
 
   token="${CODEX_SWITCH_TOKEN:-}"
+  if [ -z "$token" ] && [ -n "${CODEX_SWITCH_TOKEN_FILE:-}" ]; then
+    if [ ! -r "$CODEX_SWITCH_TOKEN_FILE" ]; then
+      cs_die "Token file is not readable: $CODEX_SWITCH_TOKEN_FILE"
+      return 1
+    fi
+    IFS= read -r token < "$CODEX_SWITCH_TOKEN_FILE" || true
+  fi
+
   if [ -z "$token" ]; then
     if [ -f "$secret_file" ] && cs_can_prompt; then
       cs_read_secret "Token (blank to keep current): " token
@@ -161,10 +192,12 @@ cs_add() {
 
   if [ -z "$base_url" ]; then
     cs_die "Base URL cannot be empty."
+    return 1
   fi
 
   if [ "$keep_existing" != "true" ] && [ -z "$token" ]; then
     cs_die "Token cannot be empty."
+    return 1
   fi
 
   provider_id="$(cs_provider_id "$name")"
@@ -183,7 +216,7 @@ EOF
   chmod 600 "$profile_file" 2>/dev/null || true
 
   if [ "$keep_existing" != "true" ]; then
-    printf 'export CODEX_SWITCH_API_KEY=%q\n' "$token" > "$secret_file"
+    printf '%s\n' "$token" > "$secret_file"
     chmod 600 "$secret_file" 2>/dev/null || true
   fi
 
@@ -193,9 +226,15 @@ EOF
 cs_use() {
   local name
   name="${1:-}"
-  [ -n "$name" ] || cs_die "Usage: codex-switch use <profile>"
-  cs_is_valid_name "$name" || cs_die "Invalid profile name: $name"
-  [ -f "$(cs_profile_file "$name")" ] || cs_die "Profile not found: $name"
+  if [ -z "$name" ]; then
+    cs_die "Usage: codex-switch use <profile>"
+    return 1
+  fi
+  cs_validate_profile "$name" || return "$?"
+  if [ ! -f "$(cs_profile_file "$name")" ]; then
+    cs_die "Profile not found: $name"
+    return 1
+  fi
 
   cs_ensure_dirs
   printf '%s\n' "$name" > "$(cs_current_file)"
@@ -248,35 +287,68 @@ cs_load_secret() {
   name="$1"
   secret_file="$(cs_secret_file "$name")"
 
-  [ -f "$secret_file" ] || cs_die "Token file not found for profile: $name"
+  cs_validate_profile "$name" || return "$?"
+  if [ ! -f "$secret_file" ]; then
+    cs_die "Token file not found for profile: $name"
+    return 1
+  fi
   unset CODEX_SWITCH_API_KEY
-  # shellcheck source=/dev/null
-  source "$secret_file"
-  [ -n "${CODEX_SWITCH_API_KEY:-}" ] || cs_die "Token is empty for profile: $name"
+  IFS= read -r CODEX_SWITCH_API_KEY < "$secret_file" || true
+  if [[ "$CODEX_SWITCH_API_KEY" == export\ CODEX_SWITCH_API_KEY=* ]]; then
+    cs_die "Token file uses the old shell format. Re-run: cxadd $name"
+    return 1
+  fi
+  if [ -z "${CODEX_SWITCH_API_KEY:-}" ]; then
+    cs_die "Token is empty for profile: $name"
+    return 1
+  fi
+  export CODEX_SWITCH_API_KEY
+}
+
+cs_selected_profile() {
+  local profile
+
+  if [ -n "${CODEX_PROFILE:-}" ]; then
+    profile="$CODEX_PROFILE"
+    cs_validate_profile "$profile" || return "$?"
+    printf '%s\n' "$profile"
+    return 0
+  fi
+
+  [ -f "$(cs_current_file)" ] || return 1
+  cs_current_name
 }
 
 cs_run() {
-  local profile
-  profile="${CODEX_PROFILE:-$(cs_current_name 2>/dev/null || true)}"
+  local profile status
 
-  if [ -n "$profile" ]; then
-    [ -f "$(cs_profile_file "$profile")" ] || cs_die "Profile not found: $profile"
-    cs_load_secret "$profile"
+  if profile="$(cs_selected_profile)"; then
+    if [ ! -f "$(cs_profile_file "$profile")" ]; then
+      cs_die "Profile not found: $profile"
+      return 1
+    fi
+    cs_load_secret "$profile" || return "$?"
     command codex --profile "$profile" "$@"
   else
+    status="$?"
+    [ "$status" -eq 1 ] || return "$status"
     command codex "$@"
   fi
 }
 
 cs_exec() {
-  local profile
-  profile="${CODEX_PROFILE:-$(cs_current_name 2>/dev/null || true)}"
+  local profile status
 
-  if [ -n "$profile" ]; then
-    [ -f "$(cs_profile_file "$profile")" ] || cs_die "Profile not found: $profile"
-    cs_load_secret "$profile"
+  if profile="$(cs_selected_profile)"; then
+    if [ ! -f "$(cs_profile_file "$profile")" ]; then
+      cs_die "Profile not found: $profile"
+      return 1
+    fi
+    cs_load_secret "$profile" || return "$?"
     command codex exec --profile "$profile" "$@"
   else
+    status="$?"
+    [ "$status" -eq 1 ] || return "$status"
     command codex exec "$@"
   fi
 }
@@ -284,8 +356,11 @@ cs_exec() {
 cs_remove() {
   local name current
   name="${1:-}"
-  [ -n "$name" ] || cs_die "Usage: codex-switch remove <profile>"
-  cs_is_valid_name "$name" || cs_die "Invalid profile name: $name"
+  if [ -z "$name" ]; then
+    cs_die "Usage: codex-switch remove <profile>"
+    return 1
+  fi
+  cs_validate_profile "$name" || return "$?"
 
   rm -f "$(cs_profile_file "$name")" "$(cs_secret_file "$name")"
   current="$(cs_current_name 2>/dev/null || true)"
@@ -369,13 +444,16 @@ Environment for non-interactive add:
   CODEX_SWITCH_MODEL
   CODEX_SWITCH_WIRE_API
   CODEX_SWITCH_TOKEN
+  CODEX_SWITCH_TOKEN_FILE
 EOF
 }
 
 cs_main() {
   local command_name
   command_name="${1:-help}"
-  [ "$#" -gt 0 ] && shift || true
+  if [ "$#" -gt 0 ]; then
+    shift
+  fi
 
   case "$command_name" in
     add) cs_add "$@" ;;
