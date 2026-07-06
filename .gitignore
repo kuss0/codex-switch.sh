@@ -1,0 +1,5 @@
+.DS_Store
+*.env
+profile-secrets/
+node_modules/
+npm-debug.log*
