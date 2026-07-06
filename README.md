@@ -10,6 +10,13 @@ Codex 多配置切换脚本。它基于 Codex 原生 `--profile` 机制，不反
 - token 单独保存在 `~/.codex/profile-secrets/*.env`，不会写进仓库。
 - 提供一键安装脚本，也提供可维护的代码版脚本。
 
+## 环境要求
+
+- Linux。
+- Bash 4.3 或更新版本。
+- `curl` 或 `wget` 至少安装一个。
+- 需要能安装 Node.js 20 和 npm 全局包。
+
 ## 一键安装版
 
 使用 `curl`：

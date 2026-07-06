@@ -115,6 +115,14 @@ cs_secret_file() {
   printf '%s/%s.env\n' "$(cs_secret_dir)" "$name"
 }
 
+cs_secret_is_legacy() {
+  local secret_file line
+  secret_file="$1"
+  [ -f "$secret_file" ] || return 1
+  IFS= read -r line < "$secret_file" || return 1
+  [[ "$line" == export\ CODEX_SWITCH_API_KEY=* ]]
+}
+
 cs_current_name() {
   local file name
   file="$(cs_current_file)"
@@ -197,6 +205,11 @@ cs_add() {
 
   if [ "$keep_existing" != "true" ] && [ -z "$token" ]; then
     cs_die "Token cannot be empty."
+    return 1
+  fi
+
+  if [ "$keep_existing" = "true" ] && cs_secret_is_legacy "$secret_file"; then
+    cs_die "Token file uses the old shell format. Re-run cxadd $name and enter the token again."
     return 1
   fi
 
@@ -327,8 +340,10 @@ cs_run() {
       cs_die "Profile not found: $profile"
       return 1
     fi
-    cs_load_secret "$profile" || return "$?"
-    command codex --profile "$profile" "$@"
+    (
+      cs_load_secret "$profile" || exit "$?"
+      command codex --profile "$profile" "$@"
+    )
   else
     status="$?"
     [ "$status" -eq 1 ] || return "$status"
@@ -344,8 +359,10 @@ cs_exec() {
       cs_die "Profile not found: $profile"
       return 1
     fi
-    cs_load_secret "$profile" || return "$?"
-    command codex exec --profile "$profile" "$@"
+    (
+      cs_load_secret "$profile" || exit "$?"
+      command codex exec --profile "$profile" "$@"
+    )
   else
     status="$?"
     [ "$status" -eq 1 ] || return "$status"
