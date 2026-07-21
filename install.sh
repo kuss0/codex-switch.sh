@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_RAW_URL="${CODEX_SWITCH_RAW_URL:-https://raw.githubusercontent.com/kuss0/codex-switch.sh/main/codex-switch.sh}"
-CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-INSTALL_PATH="${CODEX_SWITCH_INSTALL_PATH:-$CODEX_HOME/codex-switch.sh}"
-BIN_DIR="${CODEX_SWITCH_BIN_DIR:-$HOME/.local/bin}"
+# Install Codex + Grok CLIs and the unified ai-switch profile switcher.
+
+REPO_RAW_BASE="${AI_SWITCH_RAW_BASE:-https://raw.githubusercontent.com/kuss0/codex-switch.sh/main}"
+SHARE_DIR="${AI_SWITCH_SHARE_DIR:-$HOME/.local/share/ai-switch}"
+BIN_DIR="${AI_SWITCH_BIN_DIR:-$HOME/.local/bin}"
+INSTALL_PATH="${AI_SWITCH_INSTALL_PATH:-$SHARE_DIR/ai-switch.sh}"
 
 msg() {
   printf '%s\n' "$*"
@@ -58,6 +60,13 @@ download_to_stdout() {
   fi
 }
 
+download_to_file() {
+  local url dest
+  url="$1"
+  dest="$2"
+  download_to_stdout "$url" > "$dest"
+}
+
 install_packages() {
   if have apt-get; then
     as_root apt-get update
@@ -100,7 +109,7 @@ install_node() {
   load_fnm
 }
 
-install_codex() {
+install_clis() {
   if ! have npm; then
     msg "npm was not found after Node.js setup." >&2
     return 1
@@ -108,52 +117,74 @@ install_codex() {
 
   msg "Installing Codex CLI..."
   npm install -g @openai/codex
+
+  msg "Installing Grok CLI..."
+  npm install -g @xai-official/grok
 }
 
 install_switcher() {
-  local script_source script_dir local_switch tmp
+  local script_source script_dir local_dir tmp name
   script_source="${BASH_SOURCE[0]:-}"
-  local_switch=""
+  local_dir=""
 
   if [ -n "$script_source" ] && [ -f "$script_source" ]; then
     case "$script_source" in
       /dev/*|/proc/*) ;;
       *)
         script_dir="$(cd "$(dirname "$script_source")" >/dev/null 2>&1 && pwd -P)"
-        local_switch="$script_dir/codex-switch.sh"
+        if [ -f "$script_dir/ai-switch.sh" ] && [ -f "$script_dir/codex-switch.sh" ] && [ -f "$script_dir/grok-switch.sh" ]; then
+          local_dir="$script_dir"
+        fi
         ;;
     esac
   fi
 
-  mkdir -p "$CODEX_HOME" "$BIN_DIR"
-  chmod 700 "$CODEX_HOME" 2>/dev/null || true
+  mkdir -p "$SHARE_DIR" "$BIN_DIR" "$HOME/.codex" "$HOME/.grok"
+  chmod 700 "$HOME/.codex" "$HOME/.grok" 2>/dev/null || true
 
-  tmp="$(mktemp)"
-  if [ -f "$local_switch" ]; then
-    cp "$local_switch" "$tmp"
-  else
-    download_to_stdout "$REPO_RAW_URL" > "$tmp"
-  fi
+  for name in ai-switch.sh codex-switch.sh grok-switch.sh; do
+    tmp="$(mktemp)"
+    if [ -n "$local_dir" ] && [ -f "$local_dir/$name" ]; then
+      cp "$local_dir/$name" "$tmp"
+    else
+      download_to_file "$REPO_RAW_BASE/$name" "$tmp"
+    fi
+    install -m 700 "$tmp" "$SHARE_DIR/$name"
+    rm -f "$tmp"
+  done
 
-  install -m 700 "$tmp" "$INSTALL_PATH"
-  rm -f "$tmp"
+  ln -sf "$SHARE_DIR/ai-switch.sh" "$BIN_DIR/ai-switch" 2>/dev/null || true
+  ln -sf "$SHARE_DIR/codex-switch.sh" "$BIN_DIR/codex-switch" 2>/dev/null || true
+  ln -sf "$SHARE_DIR/grok-switch.sh" "$BIN_DIR/grok-switch" 2>/dev/null || true
 
-  ln -sf "$INSTALL_PATH" "$BIN_DIR/codex-switch" 2>/dev/null || true
+  # Keep legacy paths working
+  ln -sf "$SHARE_DIR/codex-switch.sh" "$HOME/.codex/codex-switch.sh" 2>/dev/null || true
+  ln -sf "$SHARE_DIR/grok-switch.sh" "$HOME/.grok/grok-switch.sh" 2>/dev/null || true
 
-  "$INSTALL_PATH" init-config
-  CODEX_SWITCH_SCRIPT_PATH="$INSTALL_PATH" "$INSTALL_PATH" install-shell "$HOME/.bashrc"
+  "$SHARE_DIR/ai-switch.sh" init-config
+  AI_SWITCH_SCRIPT_PATH="$INSTALL_PATH" "$SHARE_DIR/ai-switch.sh" install-shell "$HOME/.bashrc"
 }
 
-maybe_create_profile() {
+maybe_create_profiles() {
   local answer name
 
-  if [ "${CODEX_SWITCH_SKIP_PROFILE:-0}" = "1" ]; then
+  if [ "${AI_SWITCH_SKIP_PROFILE:-0}" = "1" ]; then
     return 0
   fi
 
+  # Non-interactive codex profile
   if [ -n "${CODEX_SWITCH_PROFILE:-}" ]; then
-    "$INSTALL_PATH" add "$CODEX_SWITCH_PROFILE"
-    "$INSTALL_PATH" use "$CODEX_SWITCH_PROFILE"
+    "$SHARE_DIR/codex-switch.sh" add "$CODEX_SWITCH_PROFILE"
+    "$SHARE_DIR/codex-switch.sh" use "$CODEX_SWITCH_PROFILE"
+  fi
+
+  # Non-interactive grok profile
+  if [ -n "${GROK_SWITCH_PROFILE:-}" ]; then
+    "$SHARE_DIR/grok-switch.sh" add "$GROK_SWITCH_PROFILE"
+    "$SHARE_DIR/grok-switch.sh" use "$GROK_SWITCH_PROFILE"
+  fi
+
+  if [ -n "${CODEX_SWITCH_PROFILE:-}" ] || [ -n "${GROK_SWITCH_PROFILE:-}" ]; then
     return 0
   fi
 
@@ -163,13 +194,25 @@ maybe_create_profile() {
 
   prompt "Create first Codex profile now? [Y/n]: " answer
   case "$answer" in
-    n|N|no|NO|No) return 0 ;;
+    n|N|no|NO|No) ;;
+    *)
+      prompt "Codex profile name [default]: " name
+      name="${name:-default}"
+      "$SHARE_DIR/codex-switch.sh" add "$name"
+      "$SHARE_DIR/codex-switch.sh" use "$name"
+      ;;
   esac
 
-  prompt "Initial profile name [default]: " name
-  name="${name:-default}"
-  "$INSTALL_PATH" add "$name"
-  "$INSTALL_PATH" use "$name"
+  prompt "Create first Grok profile now? [Y/n]: " answer
+  case "$answer" in
+    n|N|no|NO|No) ;;
+    *)
+      prompt "Grok profile name [default]: " name
+      name="${name:-default}"
+      "$SHARE_DIR/grok-switch.sh" add "$name"
+      "$SHARE_DIR/grok-switch.sh" use "$name"
+      ;;
+  esac
 }
 
 main() {
@@ -177,14 +220,17 @@ main() {
   install_packages || msg "Dependency install skipped or partially failed. Continuing..."
 
   install_node
-  install_codex
+  install_clis
   install_switcher
-  maybe_create_profile
+  maybe_create_profiles
 
   msg ""
-  msg "Codex switcher installed."
+  msg "ai-switch installed (Codex + Grok)."
   msg "Open a new shell, or run: source ~/.bashrc"
-  msg "Commands: cx, cxadd, cxuse, cxlist, cxwhich, cxrm"
+  msg ""
+  msg "Codex:  cx  cxe  cxadd  cxuse  cxlist  cxwhich  cxrm"
+  msg "Grok:   gx  gxe  gxadd  gxuse  gxlist  gxwhich  gxrm"
+  msg "Both:   as  aslist  asstatus"
 }
 
 main "$@"
