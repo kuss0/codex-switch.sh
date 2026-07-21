@@ -308,6 +308,7 @@ gs_apply_profile_to_config() {
 
 gs_add() {
   local name base_url model api_backend display_name token profile_file secret_file keep_existing
+  local advanced
 
   gs_ensure_dirs
 
@@ -329,48 +330,55 @@ gs_add() {
   secret_file="$(gs_secret_file "$name")"
   keep_existing="false"
 
+  # Interactive default: only Base URL + API Key.
+  # Model / backend / display name default unless env or GROK_SWITCH_ADVANCED=1.
   base_url="${GROK_SWITCH_BASE_URL:-}"
   if [ -z "$base_url" ] && gs_can_prompt; then
     gs_read "Base URL: " base_url
   fi
 
-  model="${GROK_SWITCH_MODEL:-}"
-  if [ -z "$model" ] && gs_can_prompt; then
-    gs_read "Model [grok-4.5]: " model
-  fi
-  model="${model:-grok-4.5}"
-
-  api_backend="${GROK_SWITCH_API_BACKEND:-}"
-  if [ -z "$api_backend" ] && gs_can_prompt; then
-    gs_read "API backend [responses]: " api_backend
-  fi
-  api_backend="${api_backend:-responses}"
-
-  display_name="${GROK_SWITCH_DISPLAY_NAME:-}"
-  if [ -z "$display_name" ] && gs_can_prompt; then
-    gs_read "Display name [$name]: " display_name
-  fi
-  display_name="${display_name:-$name}"
-
-  token="${GROK_SWITCH_TOKEN:-}"
-  if [ -z "$token" ] && [ -n "${GROK_SWITCH_TOKEN_FILE:-}" ]; then
-    if [ ! -r "$GROK_SWITCH_TOKEN_FILE" ]; then
-      gs_die "Token file is not readable: $GROK_SWITCH_TOKEN_FILE"
+  token="${GROK_SWITCH_TOKEN:-${GROK_SWITCH_API_KEY:-}}"
+  if [ -z "$token" ] && [ -n "${GROK_SWITCH_TOKEN_FILE:-${GROK_SWITCH_API_KEY_FILE:-}}" ]; then
+    local token_file
+    token_file="${GROK_SWITCH_TOKEN_FILE:-${GROK_SWITCH_API_KEY_FILE}}"
+    if [ ! -r "$token_file" ]; then
+      gs_die "API key file is not readable: $token_file"
       return 1
     fi
-    IFS= read -r token < "$GROK_SWITCH_TOKEN_FILE" || true
+    IFS= read -r token < "$token_file" || true
   fi
 
   if [ -z "$token" ]; then
     if [ -f "$secret_file" ] && gs_can_prompt; then
-      gs_read_secret "Token (blank to keep current): " token
+      gs_read_secret "API Key (blank to keep current): " token
       [ -z "$token" ] && keep_existing="true"
     elif gs_can_prompt; then
-      gs_read_secret "Token: " token
+      gs_read_secret "API Key: " token
     elif [ -f "$secret_file" ]; then
       keep_existing="true"
     fi
   fi
+
+  model="${GROK_SWITCH_MODEL:-}"
+  api_backend="${GROK_SWITCH_API_BACKEND:-}"
+  display_name="${GROK_SWITCH_DISPLAY_NAME:-}"
+  advanced="${GROK_SWITCH_ADVANCED:-0}"
+
+  if [ "$advanced" = "1" ] && gs_can_prompt; then
+    if [ -z "$model" ]; then
+      gs_read "Model [grok-4.5]: " model
+    fi
+    if [ -z "$api_backend" ]; then
+      gs_read "API backend [responses]: " api_backend
+    fi
+    if [ -z "$display_name" ]; then
+      gs_read "Display name [$name]: " display_name
+    fi
+  fi
+
+  model="${model:-grok-4.5}"
+  api_backend="${api_backend:-responses}"
+  display_name="${display_name:-$name}"
 
   if [ -z "$base_url" ]; then
     gs_die "Base URL cannot be empty."
@@ -378,7 +386,7 @@ gs_add() {
   fi
 
   if [ "$keep_existing" != "true" ] && [ -z "$token" ]; then
-    gs_die "Token cannot be empty."
+    gs_die "API Key cannot be empty."
     return 1
   fi
 
@@ -398,6 +406,7 @@ EOF
   gs_apply_profile_to_config "$name" || return "$?"
 
   echo "Saved profile: $name"
+  echo "  model=$model  backend=$api_backend"
 }
 
 gs_use() {
@@ -467,17 +476,17 @@ gs_load_secret() {
 
   gs_validate_profile "$name" || return "$?"
   if [ ! -f "$secret_file" ]; then
-    gs_die "Token file not found for profile: $name"
+    gs_die "API key file not found for profile: $name"
     return 1
   fi
   unset GROK_SWITCH_API_KEY
   IFS= read -r GROK_SWITCH_API_KEY < "$secret_file" || true
   if [[ "$GROK_SWITCH_API_KEY" == export\ GROK_SWITCH_API_KEY=* ]]; then
-    gs_die "Token file uses the old shell format. Re-run: gxadd $name"
+    gs_die "API key file uses the old shell format. Re-run: gxadd $name"
     return 1
   fi
   if [ -z "${GROK_SWITCH_API_KEY:-}" ]; then
-    gs_die "Token is empty for profile: $name"
+    gs_die "API key is empty for profile: $name"
     return 1
   fi
   export GROK_SWITCH_API_KEY
@@ -625,14 +634,19 @@ Shell helpers after sourcing:
   gxwhich               show current profile
   gxrm <name>           remove profile
 
-Environment for non-interactive add:
+Interactive add asks only:
+  Profile name / Base URL / API Key
+  (model=grok-4.5, backend=responses by default)
+
+Optional advanced env for non-interactive add:
   GROK_SWITCH_PROFILE
   GROK_SWITCH_BASE_URL
-  GROK_SWITCH_MODEL
-  GROK_SWITCH_API_BACKEND
+  GROK_SWITCH_API_KEY / GROK_SWITCH_TOKEN
+  GROK_SWITCH_API_KEY_FILE / GROK_SWITCH_TOKEN_FILE
+  GROK_SWITCH_MODEL              (default: grok-4.5)
+  GROK_SWITCH_API_BACKEND        (default: responses)
   GROK_SWITCH_DISPLAY_NAME
-  GROK_SWITCH_TOKEN
-  GROK_SWITCH_TOKEN_FILE
+  GROK_SWITCH_ADVANCED=1         (also prompt model/backend/display)
 
 Override current profile for one shot:
   GROK_PROFILE=proxy1 gx

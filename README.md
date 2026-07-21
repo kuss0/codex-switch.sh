@@ -104,7 +104,9 @@ cx
 
 ```bash
 gxadd proxy1
-# Base URL / Model / API backend / Token
+# 只问：Base URL / API Key
+# model=grok-4.5、backend=responses 默认；需要改模型时：
+#   GROK_SWITCH_ADVANCED=1 gxadd proxy1
 gxuse proxy1
 gx
 ```
