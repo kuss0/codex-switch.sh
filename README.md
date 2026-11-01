@@ -57,7 +57,11 @@ profile 使用 `requires_openai_auth = false` 和 `env_key = "OPENAI_API_KEY"`�
 ## 卸载
 
 ```bash
-ai-switch uninstall-shell
-rm -f ~/.local/bin/ai-switch ~/.local/bin/codex-switch
-rm -rf ~/.local/share/ai-switch
+bash uninstall.sh
+```
+
+默认保留 Codex profile 和 token；彻底删除切换器数据及旧 Grok 数据：
+
+```bash
+bash uninstall.sh --purge-data
 ```
