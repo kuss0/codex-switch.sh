@@ -204,7 +204,7 @@ cs_add() {
 
   base_url="${CODEX_SWITCH_BASE_URL:-}"
   if [ -z "$base_url" ] && cs_can_prompt; then
-    cs_read "Base URL: " base_url
+    cs_read "API 地址: " base_url
   fi
 
   model="${CODEX_SWITCH_MODEL:-}"
@@ -231,10 +231,10 @@ cs_add() {
 
   if [ -z "$token" ]; then
     if [ -f "$secret_file" ] && cs_can_prompt; then
-      cs_read_secret "Token (blank to keep current): " token
+      cs_read_secret "API Key (hidden; blank to keep current): " token
       [ -z "$token" ] && keep_existing="true"
     elif cs_can_prompt; then
-      cs_read_secret "Token: " token
+      cs_read_secret "API Key (hidden): " token
     elif [ -f "$secret_file" ]; then
       keep_existing="true"
     fi
@@ -444,6 +444,8 @@ cs_help() {
 codex-switch - Codex profile switcher
 
 Usage:
+  codex-switch                  Open interactive API configuration menu
+  codex-switch api [name]       Add/edit API address, API Key and model
   codex-switch add [name]       Create and activate a complete configuration
   codex-switch use <name>       Back up and replace config.toml with saved config
   codex-switch save <name>      Save current config.toml, including custom settings
@@ -476,15 +478,40 @@ Environment for non-interactive add:
 EOF
 }
 
+cs_menu() {
+  local choice name
+  while true; do
+    printf '\n%s\n' 'Codex API 配置维护'
+    printf '%s\n' '1) 添加/修改 API（地址、API Key、模型）' '2) 切换已保存的 API 配置' '3) 列出配置' '4) 保存当前完整配置' '5) 恢复原始配置' '0) 退出'
+    cs_read '选择 [0-5]: ' choice || return 0
+    case "$choice" in
+      1) cs_add || return "$?" ;;
+      2|4)
+        cs_read 'Profile name: ' name || return 0
+        if [ "$choice" = 2 ]; then cs_use "$name" || return "$?"; else cs_save "$name" || return "$?"; fi
+        ;;
+      3) cs_list ;;
+      5) cs_restore || return "$?" ;;
+      0) return 0 ;;
+      *) printf '%s\n' '请输入 0 到 5。' ;;
+    esac
+  done
+}
+
 cs_main() {
   local command_name
+  if [ "$#" -eq 0 ]; then
+    if cs_can_prompt; then cs_menu; else cs_help; fi
+    return "$?"
+  fi
   command_name="${1:-help}"
   if [ "$#" -gt 0 ]; then
     shift
   fi
 
   case "$command_name" in
-    add) cs_add "$@" ;;
+    add|api|edit) cs_add "$@" ;;
+    menu) cs_menu ;;
     use|switch) cs_use "$@" ;;
     save) cs_save "$@" ;;
     restore) cs_restore "$@" ;;

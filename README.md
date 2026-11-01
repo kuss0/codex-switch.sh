@@ -10,13 +10,25 @@ curl -fsSL https://raw.githubusercontent.com/kuss0/codex-switch.sh/main/install.
 
 ## 配置并启动
 
+直接运行即可打开 API 维护菜单：
+
 ```bash
-~/.local/bin/codex-switch add default
+~/.local/bin/codex-switch
+```
+
+选择 `1` 后输入配置名称、API 地址、模型和 API Key。Key 隐藏输入，保存后立即启用。API 地址填写你自己的接口地址。
+
+也可以直接进入 API 添加/修改流程：
+
+```bash
+~/.local/bin/codex-switch api default
 # 输入 Base URL、模型和 API Key；保存后立即启用
 codex
 ```
 
 旧版本用户更新脚本后，重新运行 `add 原名称`。API Key 留空可保留旧 token，不再使用旧的环境认证方案。
+
+`api`、`add`、`edit` 是同一配置入口；不需要把 API Key 写在命令参数里。
 
 ## 管理完整配置
 

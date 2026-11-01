@@ -2,11 +2,14 @@
 import http.server
 import json
 import os
+import pty
 from pathlib import Path
 import shutil
+import select
 import subprocess
 import tempfile
 import threading
+import time
 import tomllib
 import unittest
 
@@ -136,6 +139,42 @@ class SwitchTests(unittest.TestCase):
         data = self.config()
         self.assertEqual(data['model'], self.env['CODEX_SWITCH_MODEL'])
         self.assertEqual(data['model_providers'][data['model_provider']]['experimental_bearer_token'], self.env['CODEX_SWITCH_TOKEN'])
+
+    def test_menu_prompts_for_api_address_and_hidden_key(self):
+        env = {k: v for k, v in self.env.items() if not k.startswith('CODEX_SWITCH_')}
+        master, slave = pty.openpty()
+        proc = subprocess.Popen(['bash', str(REPO / 'codex-switch.sh')], env=env, stdin=slave, stdout=slave, stderr=slave)
+        os.close(slave)
+        captured = bytearray()
+
+        def answer(prompt, value):
+            deadline = time.monotonic() + 8
+            marker = prompt.encode()
+            while marker not in captured:
+                self.assertLess(time.monotonic(), deadline, captured.decode(errors='replace'))
+                if select.select([master], [], [], 0.1)[0]:
+                    captured.extend(os.read(master, 4096))
+            os.write(master, (value + '\n').encode())
+
+        try:
+            answer('选择 [0-5]: ', '1')
+            answer('Profile name: ', 'interactive')
+            answer('API 地址: ', 'https://actual-api.invalid/v1')
+            answer('Model [gpt-5.5]: ', 'interactive-model')
+            answer('API Key (hidden): ', 'hidden-interactive-key')
+            answer('Ready: run codex directly', '0')
+            proc.wait(timeout=8)
+            self.assertEqual(proc.returncode, 0)
+            data = self.config()
+            provider = data['model_providers'][data['model_provider']]
+            self.assertEqual(provider['base_url'], 'https://actual-api.invalid/v1')
+            self.assertEqual(provider['experimental_bearer_token'], 'hidden-interactive-key')
+            self.assertNotIn(b'hidden-interactive-key', captured)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            os.close(master)
 
     def test_plain_codex_http_auth(self):
         codex = os.environ.get('CODEX_TEST_BINARY') or shutil.which('codex')
