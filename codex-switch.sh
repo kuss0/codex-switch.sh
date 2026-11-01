@@ -120,7 +120,7 @@ cs_secret_is_legacy() {
   secret_file="$1"
   [ -f "$secret_file" ] || return 1
   IFS= read -r line < "$secret_file" || return 1
-  [[ "$line" == export\ CODEX_SWITCH_API_KEY=* ]]
+  [[ "$line" == export\ CODEX_SWITCH_API_KEY=* || "$line" == export\ OPENAI_API_KEY=* ]]
 }
 
 cs_current_name() {
@@ -223,7 +223,8 @@ model_provider = "$provider_id"
 name = "$(cs_toml_escape "$name")"
 base_url = "$(cs_toml_escape "$base_url")"
 wire_api = "$(cs_toml_escape "$wire_api")"
-env_key = "CODEX_SWITCH_API_KEY"
+requires_openai_auth = false
+env_key = "OPENAI_API_KEY"
 EOF
 
   chmod 600 "$profile_file" 2>/dev/null || true
@@ -305,17 +306,20 @@ cs_load_secret() {
     cs_die "Token file not found for profile: $name"
     return 1
   fi
-  unset CODEX_SWITCH_API_KEY
-  IFS= read -r CODEX_SWITCH_API_KEY < "$secret_file" || true
-  if [[ "$CODEX_SWITCH_API_KEY" == export\ CODEX_SWITCH_API_KEY=* ]]; then
+  unset OPENAI_API_KEY CODEX_SWITCH_API_KEY
+  IFS= read -r OPENAI_API_KEY < "$secret_file" || true
+  if [[ "$OPENAI_API_KEY" == export\ CODEX_SWITCH_API_KEY=* || "$OPENAI_API_KEY" == export\ OPENAI_API_KEY=* ]]; then
     cs_die "Token file uses the old shell format. Re-run: cxadd $name"
     return 1
   fi
-  if [ -z "${CODEX_SWITCH_API_KEY:-}" ]; then
+  if [ -z "${OPENAI_API_KEY:-}" ]; then
     cs_die "Token is empty for profile: $name"
     return 1
   fi
-  export CODEX_SWITCH_API_KEY
+  # Export the legacy name too so profiles created by older releases continue
+  # to work until they are rewritten with `cxadd`.
+  CODEX_SWITCH_API_KEY="$OPENAI_API_KEY"
+  export OPENAI_API_KEY CODEX_SWITCH_API_KEY
 }
 
 cs_selected_profile() {
