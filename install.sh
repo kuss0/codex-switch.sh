@@ -70,13 +70,13 @@ download_to_file() {
 install_packages() {
   if have apt-get; then
     as_root apt-get update
-    as_root apt-get install -y ca-certificates curl wget unzip zip python3 python3-tomli
+    as_root apt-get install -y ca-certificates curl wget unzip zip
   elif have dnf; then
-    as_root dnf install -y ca-certificates curl wget unzip zip python3 python3-tomli
+    as_root dnf install -y ca-certificates curl wget unzip zip
   elif have yum; then
-    as_root yum install -y ca-certificates curl wget unzip zip python3 python3-tomli
+    as_root yum install -y ca-certificates curl wget unzip zip
   elif have apk; then
-    as_root apk add --no-cache ca-certificates curl wget unzip zip python3 py3-tomli
+    as_root apk add --no-cache ca-certificates curl wget unzip zip
   else
     msg "No supported package manager found. Skipping system dependency install."
   fi
@@ -130,7 +130,7 @@ install_switcher() {
       /dev/*|/proc/*) ;;
       *)
         script_dir="$(cd "$(dirname "$script_source")" >/dev/null 2>&1 && pwd -P)"
-        if [ -f "$script_dir/ai-switch.sh" ] && [ -f "$script_dir/codex-switch.sh" ] && [ -f "$script_dir/config-manager.py" ]; then
+        if [ -f "$script_dir/ai-switch.sh" ] && [ -f "$script_dir/codex-switch.sh" ]; then
           local_dir="$script_dir"
         fi
         ;;
@@ -140,7 +140,7 @@ install_switcher() {
   mkdir -p "$SHARE_DIR" "$BIN_DIR" "$HOME/.codex"
   chmod 700 "$HOME/.codex" 2>/dev/null || true
 
-  for name in ai-switch.sh codex-switch.sh config-manager.py; do
+  for name in ai-switch.sh codex-switch.sh; do
     tmp="$(mktemp)"
     if [ -n "$local_dir" ] && [ -f "$local_dir/$name" ]; then
       cp "$local_dir/$name" "$tmp"
@@ -171,7 +171,6 @@ maybe_create_profiles() {
   # Non-interactive codex profile
   if [ -n "${CODEX_SWITCH_PROFILE:-}" ]; then
     "$SHARE_DIR/codex-switch.sh" add "$CODEX_SWITCH_PROFILE"
-    "$SHARE_DIR/codex-switch.sh" use "$CODEX_SWITCH_PROFILE"
   fi
 
   if [ -n "${CODEX_SWITCH_PROFILE:-}" ]; then
@@ -189,7 +188,6 @@ maybe_create_profiles() {
       prompt "Codex profile name [default]: " name
       name="${name:-default}"
       "$SHARE_DIR/codex-switch.sh" add "$name"
-      "$SHARE_DIR/codex-switch.sh" use "$name"
       ;;
   esac
 

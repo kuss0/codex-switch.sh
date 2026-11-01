@@ -100,6 +100,9 @@ cs_toml_escape() {
   value="${1:-}"
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
   printf '%s' "$value"
 }
 
@@ -138,15 +141,46 @@ cs_ensure_dirs() {
   chmod 700 "$(cs_home)" "$(cs_secret_dir)" 2>/dev/null || true
 }
 
-cs_configure() {
-  local manager
-  manager="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/config-manager.py"
-  command -v python3 >/dev/null 2>&1 || { cs_die 'python3 is required to activate a profile.'; return 1; }
-  python3 "$manager" "$(cs_home)" "$@"
+cs_copy_config() {
+  local source dest tmp
+  source="$1"
+  dest="$2"
+  tmp="$(mktemp "${dest}.tmp.XXXXXX")" || return 1
+  if ! cp -- "$source" "$tmp" || ! chmod 600 "$tmp" || ! mv -f -- "$tmp" "$dest"; then
+    rm -f -- "$tmp"
+    cs_die 'Could not replace configuration.'
+    return 1
+  fi
+}
+
+cs_backup_config() {
+  local home backup
+  home="$(cs_home)"
+  [ -f "$home/config.toml" ] || return 0
+  mkdir -p "$home/config-backups" || return 1
+  chmod 700 "$home/config-backups" || return 1
+  if [ ! -f "$home/config.toml.before-codex-switch" ]; then
+    cs_copy_config "$home/config.toml" "$home/config.toml.before-codex-switch" || return 1
+  fi
+  backup="$(mktemp "$home/config-backups/config.XXXXXX.toml")" || return 1
+  cs_copy_config "$home/config.toml" "$backup"
+}
+
+cs_restore() {
+  local home
+  home="$(cs_home)"
+  if [ ! -f "$home/config.toml.before-codex-switch" ]; then
+    cs_die 'No original configuration backup exists.'
+    return 1
+  fi
+  cs_backup_config || return 1
+  cs_copy_config "$home/config.toml.before-codex-switch" "$home/config.toml" || return 1
+  rm -f -- "$(cs_current_file)"
+  echo 'Restored original config.toml. Latest configuration retained in config-backups/.'
 }
 
 cs_add() {
-  local name base_url model wire_api token provider_id profile_file secret_file keep_existing
+  local name base_url model wire_api token provider_id profile_file secret_file keep_existing tmp_profile
 
   cs_ensure_dirs
 
@@ -192,7 +226,7 @@ cs_add() {
       cs_die "Token file is not readable: $CODEX_SWITCH_TOKEN_FILE"
       return 1
     fi
-    IFS= read -r token < "$CODEX_SWITCH_TOKEN_FILE" || true
+    token="$(< "$CODEX_SWITCH_TOKEN_FILE")"
   fi
 
   if [ -z "$token" ]; then
@@ -221,31 +255,43 @@ cs_add() {
     return 1
   fi
 
+  if [ "$keep_existing" = "true" ]; then
+    token="$(< "$secret_file")"
+  fi
+  if [ -z "$token" ] || [[ "$token" == *$'\n'* || "$token" == *$'\r'* ]]; then
+    cs_die 'Token must be a nonempty single line.'
+    return 1
+  fi
+
   provider_id="$(cs_provider_id "$name")"
 
-  cat > "$profile_file" <<EOF
+  tmp_profile="$(mktemp "$(cs_home)/.config.XXXXXX")" || return 1
+  cat > "$tmp_profile" <<EOF
+# Complete configuration managed by codex-switch.
 model = "$(cs_toml_escape "$model")"
 model_provider = "$provider_id"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
 
 [model_providers.$provider_id]
 name = "$(cs_toml_escape "$name")"
 base_url = "$(cs_toml_escape "$base_url")"
 wire_api = "$(cs_toml_escape "$wire_api")"
 requires_openai_auth = false
-env_key = "OPENAI_API_KEY"
+experimental_bearer_token = "$(cs_toml_escape "$token")"
 EOF
+  cs_copy_config "$tmp_profile" "$profile_file" || { rm -f -- "$tmp_profile"; return 1; }
+  rm -f -- "$tmp_profile"
 
   chmod 600 "$profile_file" 2>/dev/null || true
 
   if [ "$keep_existing" != "true" ]; then
-    printf '%s\n' "$token" > "$secret_file"
+    (umask 077; printf '%s\n' "$token" > "$secret_file") || return 1
     chmod 600 "$secret_file" 2>/dev/null || true
   fi
 
   echo "Saved profile: $name"
-  if [ "$(cs_current_name 2>/dev/null || true)" = "$name" ]; then
-    cs_use "$name" || return "$?"
-  fi
+  cs_use "$name"
 }
 
 cs_use() {
@@ -262,9 +308,27 @@ cs_use() {
   fi
 
   cs_ensure_dirs
-  cs_configure "$name" || return "$?"
+  if grep -Eq '^env_key = "(OPENAI_API_KEY|CODEX_SWITCH_API_KEY)"' "$(cs_profile_file "$name")"; then
+    cs_die "This is an old environment-based profile. Run: codex-switch add $name (blank token keeps the stored key)."
+    return 1
+  fi
+  cs_init_config >/dev/null || return 1
+  cs_backup_config || return 1
+  cs_copy_config "$(cs_profile_file "$name")" "$(cs_home)/config.toml" || return 1
+  (umask 077; printf '%s\n' "$name" > "$(cs_current_file)") || return 1
   echo "Current profile: $name"
+  echo 'Replaced complete config.toml; previous settings are in config-backups/.'
   echo 'Ready: run codex directly (no shell alias or exported token needed).'
+}
+
+cs_save() {
+  local name
+  name="${1:-}"
+  cs_validate_profile "$name" || return "$?"
+  [ -f "$(cs_home)/config.toml" ] || { cs_die 'No config.toml to save.'; return 1; }
+  cs_ensure_dirs
+  cs_copy_config "$(cs_home)/config.toml" "$(cs_profile_file "$name")" || return 1
+  echo "Saved complete current configuration as: $name"
 }
 
 cs_list() {
@@ -307,82 +371,12 @@ cs_which() {
   fi
 }
 
-cs_load_secret() {
-  local name secret_file
-  name="$1"
-  secret_file="$(cs_secret_file "$name")"
-
-  cs_validate_profile "$name" || return "$?"
-  if [ ! -f "$secret_file" ]; then
-    cs_die "Token file not found for profile: $name"
-    return 1
-  fi
-  unset OPENAI_API_KEY CODEX_SWITCH_API_KEY
-  IFS= read -r OPENAI_API_KEY < "$secret_file" || true
-  if [[ "$OPENAI_API_KEY" == export\ CODEX_SWITCH_API_KEY=* || "$OPENAI_API_KEY" == export\ OPENAI_API_KEY=* ]]; then
-    cs_die "Token file uses the old shell format. Re-run: cxadd $name"
-    return 1
-  fi
-  if [ -z "${OPENAI_API_KEY:-}" ]; then
-    cs_die "Token is empty for profile: $name"
-    return 1
-  fi
-  # Export the legacy name too so profiles created by older releases continue
-  # to work until they are rewritten with `cxadd`.
-  CODEX_SWITCH_API_KEY="$OPENAI_API_KEY"
-  export OPENAI_API_KEY CODEX_SWITCH_API_KEY
-}
-
-cs_selected_profile() {
-  local profile
-
-  if [ -n "${CODEX_PROFILE:-}" ]; then
-    profile="$CODEX_PROFILE"
-    cs_validate_profile "$profile" || return "$?"
-    printf '%s\n' "$profile"
-    return 0
-  fi
-
-  [ -f "$(cs_current_file)" ] || return 1
-  cs_current_name
-}
-
 cs_run() {
-  local profile status
-
-  if profile="$(cs_selected_profile)"; then
-    if [ ! -f "$(cs_profile_file "$profile")" ]; then
-      cs_die "Profile not found: $profile"
-      return 1
-    fi
-    (
-      cs_load_secret "$profile" || exit "$?"
-      command codex --profile "$profile" "$@"
-    )
-  else
-    status="$?"
-    [ "$status" -eq 1 ] || return "$status"
-    command codex "$@"
-  fi
+  command codex "$@"
 }
 
 cs_exec() {
-  local profile status
-
-  if profile="$(cs_selected_profile)"; then
-    if [ ! -f "$(cs_profile_file "$profile")" ]; then
-      cs_die "Profile not found: $profile"
-      return 1
-    fi
-    (
-      cs_load_secret "$profile" || exit "$?"
-      command codex exec --profile "$profile" "$@"
-    )
-  else
-    status="$?"
-    [ "$status" -eq 1 ] || return "$status"
-    command codex exec "$@"
-  fi
+  command codex exec "$@"
 }
 
 cs_remove() {
@@ -396,7 +390,7 @@ cs_remove() {
 
   current="$(cs_current_name 2>/dev/null || true)"
   if [ "$current" = "$name" ]; then
-    cs_configure || return "$?"
+    cs_restore || return "$?"
   fi
   rm -f "$(cs_profile_file "$name")" "$(cs_secret_file "$name")"
   echo "Removed profile: $name"
@@ -413,7 +407,7 @@ cs_init_config() {
   fi
 
   cat > "$config" <<'EOF'
-# Codex base config. Provider/model settings are selected by profiles.
+# Codex base config. codex-switch replaces this with a complete saved config.
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 EOF
@@ -450,8 +444,10 @@ cs_help() {
 codex-switch - Codex profile switcher
 
 Usage:
-  codex-switch add [name]       Add or update a profile
-  codex-switch use <name>       Activate default config for plain codex
+  codex-switch add [name]       Create and activate a complete configuration
+  codex-switch use <name>       Back up and replace config.toml with saved config
+  codex-switch save <name>      Save current config.toml, including custom settings
+  codex-switch restore          Restore original config.toml
   codex-switch list             List profiles
   codex-switch current          Show current profile
   codex-switch run [args...]    Run codex with current profile
@@ -490,6 +486,8 @@ cs_main() {
   case "$command_name" in
     add) cs_add "$@" ;;
     use|switch) cs_use "$@" ;;
+    save) cs_save "$@" ;;
+    restore) cs_restore "$@" ;;
     list|ls) cs_list "$@" ;;
     current|which) cs_which "$@" ;;
     run) cs_run "$@" ;;

@@ -42,8 +42,8 @@ class SwitchTests(unittest.TestCase):
         self.assertFalse(provider['requires_openai_auth'])
         self.assertEqual(provider['experimental_bearer_token'], 'offline-test-token')
         self.assertNotIn('env_key', provider)
-        self.assertEqual(data['mcp_servers']['demo']['command'], 'example')
-        self.assertIn('# keep this comment', (self.home / 'config.toml').read_text())
+        self.assertEqual((self.home / 'config.toml').read_bytes(), (self.home / 'one.config.toml').read_bytes())
+        self.assertEqual((self.home / 'config.toml.before-codex-switch').read_text(), self.original)
         self.assertEqual((self.home / 'config.toml').stat().st_mode & 0o777, 0o600)
         self.assertFalse((self.home / 'auth.json').exists())
         self.env['CODEX_SWITCH_TOKEN'] = 'second-test-token'
@@ -54,21 +54,23 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(self.config(), tomllib.loads(self.original))
         self.assertFalse((self.home / 'current-profile').exists())
 
-    def test_missing_secret_does_not_activate(self):
+    def test_saved_config_does_not_need_token_env_or_secret_file(self):
         self.switch('add', 'one')
         (self.home / 'profile-secrets/one.env').unlink()
-        self.switch('use', 'one', ok=False)
-        self.assertEqual((self.home / 'config.toml').read_text(), self.original)
-        self.assertFalse((self.home / 'current-profile').exists())
+        self.switch('use', 'one')
+        data = self.config()
+        self.assertEqual(data['model_providers'][data['model_provider']]['experimental_bearer_token'], 'offline-test-token')
 
-    def test_legacy_profile_and_update(self):
+    def test_legacy_profile_rejected_and_recreated(self):
         self.switch('add', 'one')
         path = self.home / 'one.config.toml'
-        path.write_text(path.read_text().replace('env_key = "OPENAI_API_KEY"', 'env_key = "CODEX_SWITCH_API_KEY"'))
-        self.switch('use', 'one')
+        path.write_text(path.read_text().replace('experimental_bearer_token = "offline-test-token"', 'env_key = "CODEX_SWITCH_API_KEY"'))
+        result = self.switch('use', 'one', ok=False)
+        self.assertIn('old environment-based profile', result.stderr)
         self.env['CODEX_SWITCH_TOKEN'] = 'updated-token'
         self.switch('add', 'one')
-        self.assertEqual(self.config()['model_providers']['codex_switch_active']['experimental_bearer_token'], 'updated-token')
+        data = self.config()
+        self.assertEqual(data['model_providers'][data['model_provider']]['experimental_bearer_token'], 'updated-token')
 
     def test_install_then_use_without_sourcing(self):
         env = dict(self.env, HOME=str(self.home), AI_SWITCH_RAW_BASE=REPO.as_uri(), AI_SWITCH_SHARE_DIR=str(self.home / '.local/share/ai-switch'), AI_SWITCH_BIN_DIR=str(self.home / '.local/bin'))
@@ -79,23 +81,22 @@ class SwitchTests(unittest.TestCase):
         for args in [('add', 'installed'), ('use', 'installed')]:
             result = subprocess.run([str(binary), *args], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.config()['model_provider'], 'codex_switch_active')
-        self.assertTrue((self.home / '.local/share/ai-switch/config-manager.py').exists())
+        self.assertEqual(self.config()['model_provider'], 'proxy_installed')
+        self.assertFalse((self.home / '.local/share/ai-switch/config-manager.py').exists())
 
-    def test_invalid_config_unchanged(self):
+    def test_invalid_previous_config_backed_up_without_parsing(self):
         (self.home / 'config.toml').write_text('model = [broken TOML\n')
         self.switch('add', 'one')
-        result = self.switch('use', 'one', ok=False)
-        self.assertIn('config.toml is invalid TOML', result.stderr)
-        self.assertEqual((self.home / 'config.toml').read_text(), 'model = [broken TOML\n')
-        self.assertFalse((self.home / 'current-profile').exists())
+        self.switch('use', 'one')
+        self.assertEqual((self.home / 'config.toml.before-codex-switch').read_text(), 'model = [broken TOML\n')
+        self.assertEqual(self.config()['model'], 'test-model')
 
     def test_multiline_root_settings(self):
         original = 'model = """original"""\nmodel_provider = """\nopenai"""\nnotes = """\n[not.a.table]\nmodel = this is text\n"""\n'
         (self.home / 'config.toml').write_text(original)
         self.switch('add', 'one')
         self.switch('use', 'one')
-        self.assertEqual(self.config()['notes'], tomllib.loads(original)['notes'])
+        self.assertEqual((self.home / 'config.toml.before-codex-switch').read_text(), original)
         self.switch('remove', 'one')
         self.assertEqual(self.config(), tomllib.loads(original))
 
@@ -106,12 +107,35 @@ class SwitchTests(unittest.TestCase):
         self.assertFalse((self.home / 'one.config.toml').exists())
 
     def test_bad_token_error_is_specific_and_redacted(self):
-        self.switch('add', 'one')
-        (self.home / 'profile-secrets/one.env').write_text('secret-first-line\nsecret-second-line\n')
-        result = self.switch('use', 'one', ok=False)
-        self.assertIn('exactly one nonempty plain-text line', result.stderr)
+        self.env['CODEX_SWITCH_TOKEN'] = 'secret-first-line\nsecret-second-line'
+        result = self.switch('add', 'one', ok=False)
+        self.assertIn('nonempty single line', result.stderr)
         self.assertNotIn('secret-first-line', result.stderr)
         self.assertEqual((self.home / 'config.toml').read_text(), self.original)
+
+    def test_save_preserves_manual_settings_and_restore(self):
+        self.switch('save', 'custom')
+        self.switch('add', 'one')
+        self.switch('use', 'custom')
+        self.assertEqual((self.home / 'config.toml').read_text(), self.original)
+        self.switch('restore')
+        self.assertEqual((self.home / 'config.toml').read_text(), self.original)
+        self.assertFalse((self.home / 'current-profile').exists())
+
+    def test_fresh_install_without_config(self):
+        (self.home / 'config.toml').unlink()
+        self.switch('add', 'default')
+        self.assertEqual(self.config()['model'], 'test-model')
+        self.assertEqual((self.home / 'current-profile').read_text(), 'default\n')
+        self.assertTrue((self.home / 'config.toml.before-codex-switch').exists())
+
+    def test_config_values_are_toml_escaped(self):
+        self.env['CODEX_SWITCH_TOKEN'] = 'test-"quoted"-\\token'
+        self.env['CODEX_SWITCH_MODEL'] = 'model-"quoted"'
+        self.switch('add', 'one')
+        data = self.config()
+        self.assertEqual(data['model'], self.env['CODEX_SWITCH_MODEL'])
+        self.assertEqual(data['model_providers'][data['model_provider']]['experimental_bearer_token'], self.env['CODEX_SWITCH_TOKEN'])
 
     def test_plain_codex_http_auth(self):
         codex = os.environ.get('CODEX_TEST_BINARY') or shutil.which('codex')
