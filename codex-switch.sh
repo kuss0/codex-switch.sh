@@ -180,10 +180,11 @@ cs_add() {
   model="${model:-gpt-5.5}"
 
   wire_api="${CODEX_SWITCH_WIRE_API:-}"
-  if [ -z "$wire_api" ] && cs_can_prompt; then
-    cs_read "Wire API [responses]: " wire_api
-  fi
   wire_api="${wire_api:-responses}"
+  if [ "$wire_api" != responses ]; then
+    cs_die 'Only Wire API responses is supported. Set CODEX_SWITCH_WIRE_API=responses.'
+    return 1
+  fi
 
   token="${CODEX_SWITCH_TOKEN:-}"
   if [ -z "$token" ] && [ -n "${CODEX_SWITCH_TOKEN_FILE:-}" ]; then

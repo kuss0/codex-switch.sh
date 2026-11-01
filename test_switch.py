@@ -85,9 +85,33 @@ class SwitchTests(unittest.TestCase):
     def test_invalid_config_unchanged(self):
         (self.home / 'config.toml').write_text('model = [broken TOML\n')
         self.switch('add', 'one')
-        self.switch('use', 'one', ok=False)
+        result = self.switch('use', 'one', ok=False)
+        self.assertIn('config.toml is invalid TOML', result.stderr)
         self.assertEqual((self.home / 'config.toml').read_text(), 'model = [broken TOML\n')
         self.assertFalse((self.home / 'current-profile').exists())
+
+    def test_multiline_root_settings(self):
+        original = 'model = """original"""\nmodel_provider = """\nopenai"""\nnotes = """\n[not.a.table]\nmodel = this is text\n"""\n'
+        (self.home / 'config.toml').write_text(original)
+        self.switch('add', 'one')
+        self.switch('use', 'one')
+        self.assertEqual(self.config()['notes'], tomllib.loads(original)['notes'])
+        self.switch('remove', 'one')
+        self.assertEqual(self.config(), tomllib.loads(original))
+
+    def test_bad_wire_api_rejected_before_save(self):
+        self.env['CODEX_SWITCH_WIRE_API'] = 'chat'
+        result = self.switch('add', 'one', ok=False)
+        self.assertIn('Only Wire API responses is supported', result.stderr)
+        self.assertFalse((self.home / 'one.config.toml').exists())
+
+    def test_bad_token_error_is_specific_and_redacted(self):
+        self.switch('add', 'one')
+        (self.home / 'profile-secrets/one.env').write_text('secret-first-line\nsecret-second-line\n')
+        result = self.switch('use', 'one', ok=False)
+        self.assertIn('exactly one nonempty plain-text line', result.stderr)
+        self.assertNotIn('secret-first-line', result.stderr)
+        self.assertEqual((self.home / 'config.toml').read_text(), self.original)
 
     def test_plain_codex_http_auth(self):
         codex = os.environ.get('CODEX_TEST_BINARY') or shutil.which('codex')
