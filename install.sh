@@ -70,13 +70,13 @@ download_to_file() {
 install_packages() {
   if have apt-get; then
     as_root apt-get update
-    as_root apt-get install -y ca-certificates curl wget unzip zip
+    as_root apt-get install -y ca-certificates curl wget unzip zip python3 python3-tomli
   elif have dnf; then
-    as_root dnf install -y ca-certificates curl wget unzip zip
+    as_root dnf install -y ca-certificates curl wget unzip zip python3 python3-tomli
   elif have yum; then
-    as_root yum install -y ca-certificates curl wget unzip zip
+    as_root yum install -y ca-certificates curl wget unzip zip python3 python3-tomli
   elif have apk; then
-    as_root apk add --no-cache ca-certificates curl wget unzip zip
+    as_root apk add --no-cache ca-certificates curl wget unzip zip python3 py3-tomli
   else
     msg "No supported package manager found. Skipping system dependency install."
   fi
@@ -130,7 +130,7 @@ install_switcher() {
       /dev/*|/proc/*) ;;
       *)
         script_dir="$(cd "$(dirname "$script_source")" >/dev/null 2>&1 && pwd -P)"
-        if [ -f "$script_dir/ai-switch.sh" ] && [ -f "$script_dir/codex-switch.sh" ]; then
+        if [ -f "$script_dir/ai-switch.sh" ] && [ -f "$script_dir/codex-switch.sh" ] && [ -f "$script_dir/config-manager.py" ]; then
           local_dir="$script_dir"
         fi
         ;;
@@ -140,7 +140,7 @@ install_switcher() {
   mkdir -p "$SHARE_DIR" "$BIN_DIR" "$HOME/.codex"
   chmod 700 "$HOME/.codex" 2>/dev/null || true
 
-  for name in ai-switch.sh codex-switch.sh; do
+  for name in ai-switch.sh codex-switch.sh config-manager.py; do
     tmp="$(mktemp)"
     if [ -n "$local_dir" ] && [ -f "$local_dir/$name" ]; then
       cp "$local_dir/$name" "$tmp"
@@ -206,6 +206,7 @@ main() {
 
   msg ""
   msg "Codex switcher installed."
+  msg "After adding/selecting a profile, run codex directly. No alias is required."
   msg "Open a new shell, or run: source ~/.bashrc"
   msg ""
   msg "Codex:  cx  cxe  cxadd  cxuse  cxlist  cxwhich  cxrm"

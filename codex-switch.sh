@@ -138,6 +138,13 @@ cs_ensure_dirs() {
   chmod 700 "$(cs_home)" "$(cs_secret_dir)" 2>/dev/null || true
 }
 
+cs_configure() {
+  local manager
+  manager="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/config-manager.py"
+  command -v python3 >/dev/null 2>&1 || { cs_die 'python3 is required to activate a profile.'; return 1; }
+  python3 "$manager" "$(cs_home)" "$@"
+}
+
 cs_add() {
   local name base_url model wire_api token provider_id profile_file secret_file keep_existing
 
@@ -235,6 +242,9 @@ EOF
   fi
 
   echo "Saved profile: $name"
+  if [ "$(cs_current_name 2>/dev/null || true)" = "$name" ]; then
+    cs_use "$name" || return "$?"
+  fi
 }
 
 cs_use() {
@@ -251,9 +261,9 @@ cs_use() {
   fi
 
   cs_ensure_dirs
-  printf '%s\n' "$name" > "$(cs_current_file)"
-  chmod 600 "$(cs_current_file)" 2>/dev/null || true
+  cs_configure "$name" || return "$?"
   echo "Current profile: $name"
+  echo 'Ready: run codex directly (no shell alias or exported token needed).'
 }
 
 cs_list() {
@@ -383,11 +393,11 @@ cs_remove() {
   fi
   cs_validate_profile "$name" || return "$?"
 
-  rm -f "$(cs_profile_file "$name")" "$(cs_secret_file "$name")"
   current="$(cs_current_name 2>/dev/null || true)"
   if [ "$current" = "$name" ]; then
-    rm -f "$(cs_current_file)"
+    cs_configure || return "$?"
   fi
+  rm -f "$(cs_profile_file "$name")" "$(cs_secret_file "$name")"
   echo "Removed profile: $name"
 }
 
@@ -440,7 +450,7 @@ codex-switch - Codex profile switcher
 
 Usage:
   codex-switch add [name]       Add or update a profile
-  codex-switch use <name>       Set current profile
+  codex-switch use <name>       Activate default config for plain codex
   codex-switch list             List profiles
   codex-switch current          Show current profile
   codex-switch run [args...]    Run codex with current profile

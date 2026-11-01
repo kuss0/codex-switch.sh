@@ -36,6 +36,7 @@ remove_path "$BIN_DIR/grok-switch"
 remove_path "$SHARE_DIR/ai-switch.sh"
 remove_path "$SHARE_DIR/codex-switch.sh"
 remove_path "$SHARE_DIR/grok-switch.sh"
+remove_path "$SHARE_DIR/config-manager.py"
 remove_path "$HOME/.codex/codex-switch.sh"
 remove_path "$HOME/.grok/grok-switch.sh"
 
