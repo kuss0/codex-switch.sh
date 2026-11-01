@@ -22,7 +22,7 @@ class SwitchTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
         self.env = {k: v for k, v in os.environ.items() if k not in ('OPENAI_API_KEY', 'CODEX_SWITCH_API_KEY', 'CODEX_PROFILE', 'CODEX_SWITCH_PROFILE', 'CODEX_SWITCH_TOKEN_FILE')}
-        self.env.update(CODEX_HOME=str(self.home), CODEX_SWITCH_TOKEN='offline-test-token', CODEX_SWITCH_MODEL='test-model', CODEX_SWITCH_BASE_URL='http://127.0.0.1:9/v1')
+        self.env.update(CODEX_HOME=str(self.home), CODEX_SWITCH_TOKEN='offline-test-token', CODEX_SWITCH_BASE_URL='http://127.0.0.1:9/v1')
         self.original = 'model = "original"\nmodel_provider = "openai"\n# keep this comment\n[projects."/example"]\ntrust_level = "trusted"\n[mcp_servers.demo]\ncommand = "example"\n'
         (self.home / 'config.toml').write_text(self.original)
 
@@ -92,7 +92,7 @@ class SwitchTests(unittest.TestCase):
         self.switch('add', 'one')
         self.switch('use', 'one')
         self.assertEqual((self.home / 'config.toml.before-codex-switch').read_text(), 'model = [broken TOML\n')
-        self.assertEqual(self.config()['model'], 'test-model')
+        self.assertNotIn('model', self.config())
 
     def test_multiline_root_settings(self):
         original = 'model = """original"""\nmodel_provider = """\nopenai"""\nnotes = """\n[not.a.table]\nmodel = this is text\n"""\n'
@@ -128,7 +128,7 @@ class SwitchTests(unittest.TestCase):
     def test_fresh_install_without_config(self):
         (self.home / 'config.toml').unlink()
         self.switch('add', 'default')
-        self.assertEqual(self.config()['model'], 'test-model')
+        self.assertNotIn('model', self.config())
         self.assertEqual((self.home / 'current-profile').read_text(), 'default\n')
         self.assertTrue((self.home / 'config.toml.before-codex-switch').exists())
 
@@ -137,7 +137,7 @@ class SwitchTests(unittest.TestCase):
         self.env['CODEX_SWITCH_MODEL'] = 'model-"quoted"'
         self.switch('add', 'one')
         data = self.config()
-        self.assertEqual(data['model'], self.env['CODEX_SWITCH_MODEL'])
+        self.assertNotIn('model', data)
         self.assertEqual(data['model_providers'][data['model_provider']]['experimental_bearer_token'], self.env['CODEX_SWITCH_TOKEN'])
 
     def test_menu_prompts_for_api_address_and_hidden_key(self):
@@ -160,7 +160,6 @@ class SwitchTests(unittest.TestCase):
             answer('选择 [0-5]: ', '1')
             answer('Profile name: ', 'interactive')
             answer('API 地址: ', 'https://actual-api.invalid/v1')
-            answer('Model [gpt-5.5]: ', 'interactive-model')
             answer('API Key (hidden): ', 'hidden-interactive-key')
             answer('Ready: run codex directly', '0')
             proc.wait(timeout=8)
@@ -170,6 +169,8 @@ class SwitchTests(unittest.TestCase):
             self.assertEqual(provider['base_url'], 'https://actual-api.invalid/v1')
             self.assertEqual(provider['experimental_bearer_token'], 'hidden-interactive-key')
             self.assertNotIn(b'hidden-interactive-key', captured)
+            self.assertNotIn(b'Model', captured)
+            self.assertNotIn('model', data)
         finally:
             if proc.poll() is None:
                 proc.kill()
@@ -217,7 +218,9 @@ class SwitchTests(unittest.TestCase):
         result = subprocess.run([codex, 'exec', '--skip-git-repo-check', '-C', str(self.home), 'Say OFFLINE_OK'], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=35)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(received, result.stderr)
-        self.assertEqual(received[-1], ('/v1/responses', 'Bearer offline-test-token', 'test-model'))
+        self.assertEqual(received[-1][:2], ('/v1/responses', 'Bearer offline-test-token'))
+        self.assertTrue(received[-1][2], 'Codex must choose its own native default model')
+        self.assertNotIn('model', self.config())
         self.assertIn('OFFLINE_OK', result.stdout)
 
 

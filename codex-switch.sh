@@ -180,7 +180,7 @@ cs_restore() {
 }
 
 cs_add() {
-  local name base_url model wire_api token provider_id profile_file secret_file keep_existing tmp_profile
+  local name base_url wire_api token provider_id profile_file secret_file keep_existing tmp_profile
 
   cs_ensure_dirs
 
@@ -206,12 +206,6 @@ cs_add() {
   if [ -z "$base_url" ] && cs_can_prompt; then
     cs_read "API 地址: " base_url
   fi
-
-  model="${CODEX_SWITCH_MODEL:-}"
-  if [ -z "$model" ] && cs_can_prompt; then
-    cs_read "Model [gpt-5.5]: " model
-  fi
-  model="${model:-gpt-5.5}"
 
   wire_api="${CODEX_SWITCH_WIRE_API:-}"
   wire_api="${wire_api:-responses}"
@@ -268,7 +262,6 @@ cs_add() {
   tmp_profile="$(mktemp "$(cs_home)/.config.XXXXXX")" || return 1
   cat > "$tmp_profile" <<EOF
 # Complete configuration managed by codex-switch.
-model = "$(cs_toml_escape "$model")"
 model_provider = "$provider_id"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
@@ -445,7 +438,7 @@ codex-switch - Codex profile switcher
 
 Usage:
   codex-switch                  Open interactive API configuration menu
-  codex-switch api [name]       Add/edit API address, API Key and model
+  codex-switch api [name]       Add/edit API address and API Key
   codex-switch add [name]       Create and activate a complete configuration
   codex-switch use <name>       Back up and replace config.toml with saved config
   codex-switch save <name>      Save current config.toml, including custom settings
@@ -471,7 +464,6 @@ Shell helpers after sourcing:
 Environment for non-interactive add:
   CODEX_SWITCH_PROFILE
   CODEX_SWITCH_BASE_URL
-  CODEX_SWITCH_MODEL
   CODEX_SWITCH_WIRE_API
   CODEX_SWITCH_TOKEN
   CODEX_SWITCH_TOKEN_FILE
@@ -482,7 +474,7 @@ cs_menu() {
   local choice name
   while true; do
     printf '\n%s\n' 'Codex API 配置维护'
-    printf '%s\n' '1) 添加/修改 API（地址、API Key、模型）' '2) 切换已保存的 API 配置' '3) 列出配置' '4) 保存当前完整配置' '5) 恢复原始配置' '0) 退出'
+    printf '%s\n' '1) 添加/修改 API（地址、API Key）' '2) 切换已保存的 API 配置' '3) 列出配置' '4) 保存当前完整配置' '5) 恢复原始配置' '0) 退出'
     cs_read '选择 [0-5]: ' choice || return 0
     case "$choice" in
       1) cs_add || return "$?" ;;

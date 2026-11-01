@@ -16,13 +16,15 @@ curl -fsSL https://raw.githubusercontent.com/kuss0/codex-switch.sh/main/install.
 ~/.local/bin/codex-switch
 ```
 
-选择 `1` 后输入配置名称、API 地址、模型和 API Key。Key 隐藏输入，保存后立即启用。API 地址填写你自己的接口地址。
+选择 `1` 后输入配置名称、API 地址和 API Key。Key 隐藏输入，保存后立即启用。API 地址填写你自己的接口地址。
+
+脚本不询问或指定模型，生成的配置不写 `model`，使用 Codex 原生默认模型。旧的 `CODEX_SWITCH_MODEL` 环境变量不再使用。
 
 也可以直接进入 API 添加/修改流程：
 
 ```bash
 ~/.local/bin/codex-switch api default
-# 输入 Base URL、模型和 API Key；保存后立即启用
+# 输入 API 地址和 API Key；保存后立即启用
 codex
 ```
 
@@ -59,7 +61,6 @@ codex-switch remove proxy2    # 删除方案；若正在使用，先恢复原始
 
 ```bash
 CODEX_SWITCH_BASE_URL=https://your-proxy.example/v1 \
-CODEX_SWITCH_MODEL=gpt-5.5 \
 CODEX_SWITCH_TOKEN_FILE=/path/to/token \
 ~/.local/bin/codex-switch add default
 codex
