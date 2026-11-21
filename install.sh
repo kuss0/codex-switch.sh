@@ -102,22 +102,31 @@ install_node() {
     return 1
   fi
 
-  msg "Installing Node.js 20..."
-  fnm install 20
-  fnm default 20
-  fnm use 20
+  msg "Installing current Node.js LTS..."
+  fnm install --lts --use
+  fnm default "$(node --version)"
   load_fnm
 }
 
 install_clis() {
+  local latest actual
   if ! have npm; then
     msg "npm was not found after Node.js setup." >&2
     return 1
   fi
 
-  msg "Installing Codex CLI..."
-  npm install -g @openai/codex
-
+  msg "Installing latest stable Codex CLI from the official npm registry..."
+  latest="$(npm view @openai/codex@latest version --registry=https://registry.npmjs.org/)"
+  npm install -g @openai/codex@latest --registry=https://registry.npmjs.org/
+  hash -r
+  actual="$(codex --version)"
+  msg "Codex path: $(command -v codex)"
+  msg "$actual"
+  msg "Official latest stable: $latest"
+  if [ "$actual" != "codex-cli $latest" ]; then
+    msg "The current PATH points to a different Codex version. Check your Node environment and Codex path." >&2
+    return 1
+  fi
 }
 
 install_switcher() {
@@ -140,25 +149,55 @@ install_switcher() {
   mkdir -p "$SHARE_DIR" "$BIN_DIR" "$HOME/.codex"
   chmod 700 "$HOME/.codex" 2>/dev/null || true
 
-  for name in ai-switch.sh codex-switch.sh; do
+  for name in ai-switch.sh codex-switch.sh zz.sh tmux.conf; do
     tmp="$(mktemp)"
     if [ -n "$local_dir" ] && [ -f "$local_dir/$name" ]; then
       cp "$local_dir/$name" "$tmp"
     else
       download_to_file "$REPO_RAW_BASE/$name" "$tmp"
     fi
-    install -m 700 "$tmp" "$SHARE_DIR/$name"
+    if [ "$name" = tmux.conf ]; then
+      install -m 600 "$tmp" "$SHARE_DIR/$name"
+    else
+      install -m 700 "$tmp" "$SHARE_DIR/$name"
+    fi
     rm -f "$tmp"
   done
 
   ln -sf "$SHARE_DIR/ai-switch.sh" "$BIN_DIR/ai-switch" 2>/dev/null || true
   ln -sf "$SHARE_DIR/codex-switch.sh" "$BIN_DIR/codex-switch" 2>/dev/null || true
+  # Retain an existing standalone zz before replacing it with the managed entry point.
+  if [ -e "$BIN_DIR/zz" ] && [ ! -L "$BIN_DIR/zz" ]; then
+    mkdir -p "$SHARE_DIR/install-backups"
+    chmod 700 "$SHARE_DIR/install-backups"
+    tmp="$(mktemp "$SHARE_DIR/install-backups/zz.XXXXXX")"
+    cp "$BIN_DIR/zz" "$tmp"
+    chmod 600 "$tmp"
+  fi
+  ln -sf "$SHARE_DIR/zz.sh" "$BIN_DIR/zz"
 
   # Keep legacy paths working
   ln -sf "$SHARE_DIR/codex-switch.sh" "$HOME/.codex/codex-switch.sh" 2>/dev/null || true
 
   "$SHARE_DIR/ai-switch.sh" init-config
-  AI_SWITCH_SCRIPT_PATH="$INSTALL_PATH" "$SHARE_DIR/ai-switch.sh" install-shell "$HOME/.bashrc"
+  CODEX_SWITCH_BIN_DIR="$BIN_DIR" AI_SWITCH_SCRIPT_PATH="$INSTALL_PATH" "$SHARE_DIR/ai-switch.sh" install-shell "$HOME/.bashrc"
+}
+
+maybe_install_tmux() {
+  local answer
+  case "${CODEX_SWITCH_INSTALL_TMUX:-ask}" in
+    1|yes|true) answer=y ;;
+    0|no|false) return 0 ;;
+    ask)
+      can_prompt || return 0
+      prompt '是否启用 tmux 断线保活？[y/N]: ' answer
+      ;;
+    *) msg 'CODEX_SWITCH_INSTALL_TMUX must be 0 or 1.' >&2; return 2 ;;
+  esac
+  case "$answer" in
+    y|Y|yes|YES|Yes) "$SHARE_DIR/codex-switch.sh" tmux-install ;;
+    *) msg 'Skipped optional tmux installation. Run codex directly.' ;;
+  esac
 }
 
 maybe_create_profiles() {
@@ -194,12 +233,22 @@ maybe_create_profiles() {
 }
 
 main() {
+  if [ "${1:-}" = --switcher-only ] && [ "$#" -eq 1 ]; then
+    install_switcher
+    msg 'Updated the switcher and zz. Reload ~/.bashrc or open a new shell.'
+    return
+  fi
+  if [ "$#" -ne 0 ]; then
+    msg 'Usage: install.sh [--switcher-only]' >&2
+    return 2
+  fi
   msg "Installing dependencies..."
   install_packages || msg "Dependency install skipped or partially failed. Continuing..."
 
   install_node
   install_clis
   install_switcher
+  maybe_install_tmux
   maybe_create_profiles
 
   msg ""
@@ -208,6 +257,8 @@ main() {
   msg "Open a new shell, or run: source ~/.bashrc"
   msg ""
   msg "Codex:  cx  cxe  cxadd  cxuse  cxlist  cxwhich  cxrm"
+  msg "Optional keepalive: zz / zz work / zz ls; F12 returns to SSH."
+  msg "Check/update: codex-switch version / codex-switch update"
   msg "Compatibility: ai-switch / as / asstatus"
 }
 

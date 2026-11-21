@@ -9,7 +9,15 @@ if [ -z "${BASH_VERSION:-}" ]; then
 fi
 
 as_is_sourced() { [ "${BASH_SOURCE[0]}" != "$0" ]; }
-as_script_dir() { cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P; }
+as_script_dir() {
+  local src="${BASH_SOURCE[0]}" dir
+  while [ -L "$src" ]; do
+    dir="$(cd "$(dirname "$src")" && pwd -P)" || return 1
+    src="$(readlink "$src")" || return 1
+    [[ "$src" = /* ]] || src="$dir/$src"
+  done
+  cd "$(dirname "$src")" && pwd -P
+}
 
 # shellcheck source=/dev/null
 source "$(as_script_dir)/codex-switch.sh"

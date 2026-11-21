@@ -140,7 +140,7 @@ class SwitchTests(unittest.TestCase):
         self.assertNotIn('model', data)
         self.assertEqual(data['model_providers'][data['model_provider']]['experimental_bearer_token'], self.env['CODEX_SWITCH_TOKEN'])
 
-    def test_menu_prompts_for_api_address_and_hidden_key(self):
+    def test_menu_defaults_api_address_and_shows_key_while_typing(self):
         env = {k: v for k, v in self.env.items() if not k.startswith('CODEX_SWITCH_')}
         master, slave = pty.openpty()
         proc = subprocess.Popen(['bash', str(REPO / 'codex-switch.sh')], env=env, stdin=slave, stdout=slave, stderr=slave)
@@ -157,18 +157,18 @@ class SwitchTests(unittest.TestCase):
             os.write(master, (value + '\n').encode())
 
         try:
-            answer('选择 [0-5]: ', '1')
+            answer('选择 [0-9]: ', '1')
             answer('Profile name: ', 'interactive')
-            answer('API 地址: ', 'https://actual-api.invalid/v1')
-            answer('API Key (hidden): ', 'hidden-interactive-key')
+            answer('API 地址 [https://cpa.openi.eu.org/v1]: ', '')
+            answer('API Key（可见输入）: ', 'visible-interactive-key')
             answer('Ready: run codex directly', '0')
             proc.wait(timeout=8)
             self.assertEqual(proc.returncode, 0)
             data = self.config()
             provider = data['model_providers'][data['model_provider']]
-            self.assertEqual(provider['base_url'], 'https://actual-api.invalid/v1')
-            self.assertEqual(provider['experimental_bearer_token'], 'hidden-interactive-key')
-            self.assertNotIn(b'hidden-interactive-key', captured)
+            self.assertEqual(provider['base_url'], 'https://cpa.openi.eu.org/v1')
+            self.assertEqual(provider['experimental_bearer_token'], 'visible-interactive-key')
+            self.assertIn(b'visible-interactive-key', captured)
             self.assertNotIn(b'Model', captured)
             self.assertNotIn('model', data)
         finally:

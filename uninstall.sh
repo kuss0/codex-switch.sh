@@ -20,6 +20,7 @@ remove_hook() {
     -e '/# >>> codex-switch >>>/,/# <<< codex-switch <<</d' \
     -e '/# >>> grok-switch >>>/,/# <<< grok-switch <<</d' \
     -e '/# >>> ai-switch >>>/,/# <<< ai-switch <<</d' \
+    -e '/# >>> zz-tmux >>>/,/# <<< zz-tmux <<</d' \
     "$file"
 }
 
@@ -33,9 +34,14 @@ remove_hook "$RC_FILE"
 remove_path "$BIN_DIR/ai-switch"
 remove_path "$BIN_DIR/codex-switch"
 remove_path "$BIN_DIR/grok-switch"
+if [ -L "$BIN_DIR/zz" ] && [ "$(readlink "$BIN_DIR/zz")" = "$SHARE_DIR/zz.sh" ]; then
+  remove_path "$BIN_DIR/zz"
+fi
 remove_path "$SHARE_DIR/ai-switch.sh"
 remove_path "$SHARE_DIR/codex-switch.sh"
 remove_path "$SHARE_DIR/grok-switch.sh"
+remove_path "$SHARE_DIR/zz.sh"
+remove_path "$SHARE_DIR/tmux.conf"
 remove_path "$SHARE_DIR/config-manager.py"
 remove_path "$HOME/.codex/codex-switch.sh"
 remove_path "$HOME/.grok/grok-switch.sh"
@@ -50,3 +56,4 @@ else
 fi
 
 printf 'Codex switcher uninstalled. Start a new shell or run: source %s\n' "$RC_FILE"
+printf 'Existing tmux sessions and the tmux package were preserved.\n'
