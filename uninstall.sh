@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SHARE_DIR="$HOME/.local/share/ai-switch"
-BIN_DIR="$HOME/.local/bin"
+SHARE_DIR="${AI_SWITCH_SHARE_DIR:-$HOME/.local/share/ai-switch}"
+BIN_DIR="${AI_SWITCH_BIN_DIR:-$HOME/.local/bin}"
 RC_FILE="$HOME/.bashrc"
 PURGE_DATA=0
 

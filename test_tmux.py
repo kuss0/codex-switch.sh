@@ -139,6 +139,89 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('F12', result.stdout)
 
+    def test_failed_or_invalid_download_preserves_the_installed_version(self):
+        result = self.install_functions('install_switcher')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        share = self.home / '.local/share/ai-switch'
+        paths = [share / name for name in ('ai-switch.sh', 'codex-switch.sh', 'zz.sh', 'tmux.conf')]
+        paths.append(self.home / '.bashrc')
+        original = {path: path.read_bytes() for path in paths}
+        for failure in ('return 22', 'printf "if then\\n" > "$2"', ': > "$2"'):
+            with self.subTest(failure=failure):
+                body = ('download_to_file() { case "$1" in */zz.sh) ' + failure + ' ;; '
+                        '*) cp "${1#file://}" "$2"; '
+                        'printf "\\n# staged replacement\\n" >> "$2" ;; esac; }; '
+                        'install_switcher')
+                result = self.install_functions(body)
+                self.assertNotEqual(result.returncode, 0)
+                for path, content in original.items():
+                    self.assertEqual(path.read_bytes(), content, str(path))
+                self.assertEqual(list(share.glob('.install.*')), [])
+
+    def test_foreign_zz_commands_and_links_are_backed_up_once(self):
+        binary = self.home / '.local/bin/zz'
+        binary.parent.mkdir(parents=True)
+        foreign = binary.parent / 'original-zz'
+        foreign.write_text('#!/bin/bash\necho original\n')
+        foreign.chmod(0o755)
+        share = self.home / '.local/share/ai-switch'
+        for kind in ('standalone', 'relative-link', 'dangling-link', 'directory-link'):
+            with self.subTest(kind=kind):
+                if binary.is_symlink():
+                    binary.unlink()
+                if kind == 'standalone':
+                    binary.write_bytes(foreign.read_bytes())
+                    binary.chmod(0o755)
+                elif kind == 'relative-link':
+                    binary.symlink_to('original-zz')
+                elif kind == 'dangling-link':
+                    binary.symlink_to('missing-zz')
+                else:
+                    target = self.home / 'foreign-directory'
+                    target.mkdir()
+                    binary.symlink_to(target, target_is_directory=True)
+                link_target = os.readlink(binary) if binary.is_symlink() else None
+                previous = set((share / 'install-backups').glob('zz.*'))
+                result = self.install_functions('install_switcher')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                current = set((share / 'install-backups').glob('zz.*'))
+                added = current - previous
+                self.assertEqual(len(added), 1)
+                backup = added.pop() / 'zz'
+                if link_target is None:
+                    self.assertEqual(backup.read_bytes(), foreign.read_bytes())
+                    self.assertEqual(backup.stat().st_mode & 0o777, 0o755)
+                else:
+                    self.assertTrue(backup.is_symlink())
+                    self.assertEqual(os.readlink(backup), link_target)
+                self.assertEqual(os.readlink(binary), str(share / 'zz.sh'))
+                result = self.install_functions('install_switcher')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(set((share / 'install-backups').glob('zz.*')), current)
+
+    def test_custom_install_directories_with_spaces_and_uninstall(self):
+        share = self.home / 'custom share'
+        binaries = self.home / 'custom bin'
+        env = dict(self.env, AI_SWITCH_SHARE_DIR=str(share), AI_SWITCH_BIN_DIR=str(binaries))
+        result = subprocess.run(['bash', str(REPO / 'install.sh'), '--switcher-only'],
+                                env=env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((share / 'tmux.conf').read_bytes(), (REPO / 'tmux.conf').read_bytes())
+        self.assertEqual((share / 'tmux.conf').stat().st_mode & 0o777, 0o600)
+        self.assertEqual((share / 'zz.sh').stat().st_mode & 0o777, 0o700)
+        result = subprocess.run(['bash', '-c', 'source "$HOME/.bashrc"; codex-switch start --help'],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('zz reload', result.stdout)
+        result = subprocess.run(['bash', str(REPO / 'uninstall.sh')],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ('zz', 'codex-switch', 'ai-switch'):
+            self.assertFalse((binaries / name).is_symlink())
+        self.assertFalse((share / 'zz.sh').exists())
+        self.assertFalse((share / 'tmux.conf').exists())
+        self.assertTrue((self.home / '.codex/config.toml').exists())
+
 
 @unittest.skipUnless(TMUX, 'tmux unavailable')
 class TmuxTests(unittest.TestCase):
@@ -214,7 +297,7 @@ with (r/('keys-'+str(os.getpid()))).open('ab',buffering=0) as f:
         payload = '中文输入'.encode() + b'\x10\x0e\x1b[200~' + '多行\n粘贴'.encode() + b'\x1b[201~'
         client.send(payload)
         wait_for(lambda: payload in keys.read_bytes())
-        self.assertEqual(self.tmux('show-options', '-gv', 'status').strip(), 'off')
+        self.assertEqual(self.tmux('show-options', '-gv', 'status').strip(), 'on')
         self.detach(client)
         client = self.client()
         wait_for(lambda: bool(self.tmux('list-clients').strip()))
@@ -228,6 +311,70 @@ with (r/('keys-'+str(os.getpid()))).open('ab',buffering=0) as f:
         wait_for(lambda: '重连成功'.encode() in keys.read_bytes())
         self.assertIn('历史 000 中文', self.tmux('capture-pane', '-p', '-S', '-'))
         self.detach(client)
+
+    def test_status_bar_mouse_click_selects_window(self):
+        client, pid = self.start('work')
+        first = self.tmux('list-windows', '-t', '=work', '-f', '#{window_active}',
+                          '-F', '#{window_id}').strip()
+        self.tmux('rename-window', '-t', first, 'first')
+        self.tmux('set-window-option', '-t', first, 'automatic-rename', 'off')
+        second = self.tmux('new-window', '-d', '-t', '=work', '-n', 'second',
+                           '-P', '-F', '#{window_id}', 'sleep 60').strip()
+        self.assertIn('select-window -t =', self.tmux('list-keys', '-T', 'root', 'MouseDown1Status'))
+        self.assertEqual(self.tmux('show-options', '-gv', 'mouse').strip(), 'on')
+        # Wait for the status bar before clicking its labels on terminal row 30.
+        wait_for(lambda: b'1 second' in client.output)
+        client.send(b'\x1b[<0;22;30M\x1b[<0;22;30m')
+        wait_for(lambda: self.tmux('list-windows', '-t', '=work', '-f', '#{window_active}',
+                                   '-F', '#{window_id}').strip() == second)
+        # Keep the return click separate from tmux's double-click gesture.
+        time.sleep(0.5)
+        client.send(b'\x1b[<0;13;30M\x1b[<0;13;30m')
+        wait_for(lambda: self.tmux('list-windows', '-t', '=work', '-f', '#{window_active}',
+                                   '-F', '#{window_id}').strip() == first)
+        os.kill(int(pid), 0)
+        self.assertEqual(self.launches(), [pid])
+        self.detach(client)
+
+    def test_upgrade_and_repeated_reload_keep_the_running_task(self):
+        client, pid = self.start('work')
+        self.tmux('set-option', '-g', 'status', 'off')
+        result = subprocess.run(['bash', str(REPO / 'install.sh'), '--switcher-only'],
+                                env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.tmux('show-options', '-gv', 'status').strip(), 'off')
+        binary = self.home / '.local/bin/zz'
+        features = []
+        for _ in range(3):
+            result = subprocess.run([str(binary), 'reload'], env=self.env,
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self.tmux('show-options', '-gv', 'status').strip(), 'on')
+            self.assertEqual(self.tmux('show-options', '-gv', 'status-right').strip(), '')
+            self.assertIn('bg=#008000,fg=#ffffff,bold',
+                          self.tmux('show-window-options', '-gv', 'window-status-current-style'))
+            if self.tmux('display-message', '-p', '#{>=:#{version},3.2}').strip() == '1':
+                features.append(self.tmux('show-options', '-s', 'terminal-features'))
+        if features:
+            self.assertEqual(len(set(features)), 1)
+            self.assertEqual(features[-1].count('xterm*:RGB'), 1)
+        os.kill(int(pid), 0)
+        self.assertEqual(self.launches(), [pid])
+        self.assertIn('历史 000 中文', self.tmux('capture-pane', '-p', '-S', '-'))
+        client.send('热加载成功'.encode())
+        keys = self.home / ('keys-' + pid)
+        wait_for(lambda: '热加载成功'.encode() in keys.read_bytes())
+        self.detach(client)
+
+    def test_reload_without_server_does_not_start_tasks(self):
+        result = subprocess.run(['bash', str(REPO / 'zz.sh'), 'reload'], env=self.env,
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('下次 zz', result.stdout)
+        self.assertEqual(self.launches(), [])
+        result = subprocess.run([TMUX, '-L', self.socket, '-N', 'list-sessions'],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
 
     def test_exact_names_and_numbered_session_selection(self):
         first, _ = self.start('work-long')

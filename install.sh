@@ -6,7 +6,6 @@ set -euo pipefail
 REPO_RAW_BASE="${AI_SWITCH_RAW_BASE:-https://raw.githubusercontent.com/kuss0/codex-switch.sh/main}"
 SHARE_DIR="${AI_SWITCH_SHARE_DIR:-$HOME/.local/share/ai-switch}"
 BIN_DIR="${AI_SWITCH_BIN_DIR:-$HOME/.local/bin}"
-INSTALL_PATH="${AI_SWITCH_INSTALL_PATH:-$SHARE_DIR/ai-switch.sh}"
 
 msg() {
   printf '%s\n' "$*"
@@ -129,8 +128,8 @@ install_clis() {
   fi
 }
 
-install_switcher() {
-  local script_source script_dir local_dir tmp name
+install_switcher() (
+  local script_source script_dir local_dir stage_dir backup_dir source_name
   script_source="${BASH_SOURCE[0]:-}"
   local_dir=""
 
@@ -148,40 +147,62 @@ install_switcher() {
 
   mkdir -p "$SHARE_DIR" "$BIN_DIR" "$HOME/.codex"
   chmod 700 "$HOME/.codex" 2>/dev/null || true
+  stage_dir="$(mktemp -d "$SHARE_DIR/.install.XXXXXX")"
+  trap 'rm -rf -- "$stage_dir"' EXIT
 
-  for name in ai-switch.sh codex-switch.sh zz.sh tmux.conf; do
-    tmp="$(mktemp)"
-    if [ -n "$local_dir" ] && [ -f "$local_dir/$name" ]; then
-      cp "$local_dir/$name" "$tmp"
-    else
-      download_to_file "$REPO_RAW_BASE/$name" "$tmp"
+  # Finish downloading and validating before replacing any installed file.
+  for source_name in ai-switch.sh codex-switch.sh zz.sh tmux.conf; do
+    if [ -d "$SHARE_DIR/$source_name" ]; then
+      msg "Cannot replace a directory: $SHARE_DIR/$source_name" >&2
+      return 1
     fi
-    if [ "$name" = tmux.conf ]; then
-      install -m 600 "$tmp" "$SHARE_DIR/$name"
+    if [ -n "$local_dir" ] && [ -f "$local_dir/$source_name" ]; then
+      cp "$local_dir/$source_name" "$stage_dir/$source_name"
     else
-      install -m 700 "$tmp" "$SHARE_DIR/$name"
+      download_to_file "$REPO_RAW_BASE/$source_name" "$stage_dir/$source_name"
     fi
-    rm -f "$tmp"
+    if [ ! -s "$stage_dir/$source_name" ]; then
+      msg "Downloaded file is empty: $source_name" >&2
+      return 1
+    fi
+    if [ "$source_name" = tmux.conf ]; then
+      chmod 600 "$stage_dir/$source_name"
+    else
+      bash -n "$stage_dir/$source_name"
+      chmod 700 "$stage_dir/$source_name"
+    fi
   done
 
-  ln -sf "$SHARE_DIR/ai-switch.sh" "$BIN_DIR/ai-switch" 2>/dev/null || true
-  ln -sf "$SHARE_DIR/codex-switch.sh" "$BIN_DIR/codex-switch" 2>/dev/null || true
-  # Retain an existing standalone zz before replacing it with the managed entry point.
-  if [ -e "$BIN_DIR/zz" ] && [ ! -L "$BIN_DIR/zz" ]; then
-    mkdir -p "$SHARE_DIR/install-backups"
-    chmod 700 "$SHARE_DIR/install-backups"
-    tmp="$(mktemp "$SHARE_DIR/install-backups/zz.XXXXXX")"
-    cp "$BIN_DIR/zz" "$tmp"
-    chmod 600 "$tmp"
+  for source_name in ai-switch codex-switch zz; do
+    if [ -d "$BIN_DIR/$source_name" ] && [ ! -L "$BIN_DIR/$source_name" ]; then
+      msg "Cannot replace a directory: $BIN_DIR/$source_name" >&2
+      return 1
+    fi
+  done
+  # Back up standalone commands and foreign links, including dangling links.
+  if [ -e "$BIN_DIR/zz" ] || [ -L "$BIN_DIR/zz" ]; then
+    if [ ! -L "$BIN_DIR/zz" ] || [ "$(readlink "$BIN_DIR/zz")" != "$SHARE_DIR/zz.sh" ]; then
+      mkdir -p "$SHARE_DIR/install-backups"
+      chmod 700 "$SHARE_DIR/install-backups"
+      backup_dir="$(mktemp -d "$SHARE_DIR/install-backups/zz.XXXXXX")"
+      cp -Pp -- "$BIN_DIR/zz" "$backup_dir/zz"
+      msg "Backed up existing zz: $backup_dir/zz"
+    fi
   fi
-  ln -sf "$SHARE_DIR/zz.sh" "$BIN_DIR/zz"
 
-  # Keep legacy paths working
-  ln -sf "$SHARE_DIR/codex-switch.sh" "$HOME/.codex/codex-switch.sh" 2>/dev/null || true
+  for source_name in ai-switch.sh codex-switch.sh zz.sh tmux.conf; do
+    mv -f -- "$stage_dir/$source_name" "$SHARE_DIR/$source_name"
+  done
+  ln -sfn "$SHARE_DIR/ai-switch.sh" "$BIN_DIR/ai-switch"
+  ln -sfn "$SHARE_DIR/codex-switch.sh" "$BIN_DIR/codex-switch"
+  ln -sfn "$SHARE_DIR/zz.sh" "$BIN_DIR/zz"
+
+  # Keep legacy paths working.
+  ln -sfn "$SHARE_DIR/codex-switch.sh" "$HOME/.codex/codex-switch.sh"
 
   "$SHARE_DIR/ai-switch.sh" init-config
-  CODEX_SWITCH_BIN_DIR="$BIN_DIR" AI_SWITCH_SCRIPT_PATH="$INSTALL_PATH" "$SHARE_DIR/ai-switch.sh" install-shell "$HOME/.bashrc"
-}
+  CODEX_SWITCH_BIN_DIR="$BIN_DIR" CODEX_SWITCH_SCRIPT_PATH="$SHARE_DIR/codex-switch.sh" "$SHARE_DIR/ai-switch.sh" install-shell "$HOME/.bashrc"
+)
 
 maybe_install_tmux() {
   local answer
@@ -235,7 +256,8 @@ maybe_create_profiles() {
 main() {
   if [ "${1:-}" = --switcher-only ] && [ "$#" -eq 1 ]; then
     install_switcher
-    msg 'Updated the switcher and zz. Reload ~/.bashrc or open a new shell.'
+    msg 'Updated the switcher and zz. Run ~/.local/bin/zz reload to apply tmux settings to a running server.'
+    msg 'Reload ~/.bashrc or open a new shell for shell helpers.'
     return
   fi
   if [ "$#" -ne 0 ]; then

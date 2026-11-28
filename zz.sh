@@ -6,6 +6,8 @@ zz_help() {
     printf '%s\n' 'zz            进入/恢复会话；多个会话时选择，无会话时启动 Codex' \
         'zz 工作名     进入或新建指定会话' 'zz ls         列出会话' \
         'zz stop 名称  确认后结束指定会话及其中任务' \
+        'zz reload     加载内置 tmux 配置到运行中的服务器' \
+        '鼠标点窗口名   切换窗口' \
         'F12           返回 SSH，Codex 留在后台' \
         'Ctrl+b 然后 [ 回滚历史；q 或 Esc 返回'
 }
@@ -31,6 +33,16 @@ zz_tmux() { command tmux -f "$config" "$@"; }
 zz_valid_name() { [[ ${1:-} =~ ^[[:alnum:]_-]+$ ]]; }
 
 case ${1:-} in
+    reload)
+        (( $# == 1 )) || { zz_help >&2; exit 2; }
+        if ! zz_tmux -N has-session 2>/dev/null; then
+            printf '%s\n' '当前没有运行中的 tmux 会话，下次 zz 会自动加载内置配置。'
+            exit 0
+        fi
+        zz_tmux -N source-file "$config"
+        printf '%s\n' '已加载内置 tmux 配置，窗口状态栏和鼠标点选已启用。'
+        exit 0
+        ;;
     ls|list)
         (( $# == 1 )) || { zz_help >&2; exit 2; }
         if ! zz_tmux list-sessions; then exit 1; fi

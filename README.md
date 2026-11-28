@@ -10,7 +10,14 @@ curl -fsSL https://raw.githubusercontent.com/kuss0/codex-switch.sh/main/install.
 
 安装器使用当前 Node.js LTS，并从官方 npm 源安装 `@openai/codex@latest`，显示实际命令路径、版本和官方最新稳定版。重复运行可更新已安装的脚本。
 
-只更新切换脚本和 `zz` 时，可以给安装器传入 `--switcher-only`。
+已安装的机器可以只更新切换脚本和 `zz`，然后加载新版 tmux 配置。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kuss0/codex-switch.sh/main/install.sh | bash -s -- --switcher-only
+~/.local/bin/zz reload
+```
+
+安装器会先下载全部文件并检查 Bash 语法，下载失败、空文件或语法错误时保留已安装版本。
 
 **tmux 可选安装，默认不安装。** 交互时选择是否启用断线保活，也可之后运行 `codex-switch tmux-install`。跳过 tmux 后照常直接运行 `codex`。
 
@@ -46,16 +53,18 @@ zz                           # 启动或恢复；多个会话时按序号选择
 zz work                      # 启动或恢复 work 会话
 zz ls                        # 列出会话
 zz stop work                 # 确认后结束 work 及其中任务
+zz reload                    # 升级后应用内置 tmux 配置
 ```
 
 `zz` 是独立可执行入口，无需 shell 别名。第一次创建会话会在当前目录启动原生 Codex；重连只恢复原进程，不会重复启动。已经在 tmux 中时会切换会话，避免嵌套。
 
-- **F12**：返回 SSH，Codex 留在后台；iPhone 可通过 Termius 功能键栏发送。
+- **F12** 返回 SSH，Codex 留在后台。iPhone 可通过 Termius 功能键栏发送。
+- 底部显示会话名和窗口列表，鼠标点击窗口名即可切换。会话名为紫色，当前窗口为绿底白字，状态栏使用终端默认底色。
 - 也可直接断开 SSH，再次连接后执行 `zz`。保活针对 SSH 断线，VPS 重启会结束进程。
 - 鼠标滚动、拖选复制；复制使用 OSC 52，需要终端允许写入剪贴板。粘贴使用 Termius 自带功能。
 - `Ctrl+b` 后按 `[` 回滚历史，方向键或 PageUp/PageDown 翻页，`q` 或 Esc 返回。
 
-内置配置保留 100000 行历史，关闭状态栏，只保留必要按键。配置保存在切换器目录内，**不覆盖 `~/.tmux.conf`，安装或升级不重载已有 tmux 服务器**。新服务器加载内置配置。已有服务器保留原设置，通过 `zz` 进入时会在 F12 未绑定的情况下添加脱离键。
+内置配置保留 100000 行历史，启用窗口状态栏，使用最小快捷键集合。中文输入、多行粘贴和应用按键沿用终端操作。配置保存在切换器目录的 `tmux.conf`，新服务器由 `zz` 自动加载。升级已有服务器后执行 `zz reload`，立即加载状态栏和鼠标点选设置。热加载会重设 tmux 全局配置和快捷键，同一服务器的所有会话共用这些设置。`~/.tmux.conf` 由用户独立维护。
 
 升级会清理 shell hook，并取消旧 Zellij 的 `zz/zl/zk` 别名和函数。已经打开的 Bash 不会自动重载：如果仍出现旧 Zellij 提示，执行一次 `source ~/.bashrc`，以后直接使用 `zz`。
 
@@ -114,7 +123,7 @@ curl -fsSL https://raw.githubusercontent.com/kuss0/codex-switch.sh/main/uninstal
 
 默认只移除切换器和 shell hook，保留 Codex 配置、方案与备份。如果需要恢复原配置，在卸载前先执行 `codex-switch restore`。
 
-同时移除 `zz` 和内置 tmux 配置，保留已安装的 tmux 和正在运行的会话。替换前已有的独立 `zz` 会备份到切换器目录的 `install-backups/`。
+同时移除 `zz` 和内置 tmux 配置，保留已安装的 tmux 和正在运行的会话。替换前已有的独立 `zz` 或其他来源的链接会备份到切换器目录的 `install-backups/`，安装时会显示具体路径。自定义 `AI_SWITCH_SHARE_DIR` 或 `AI_SWITCH_BIN_DIR` 时，卸载需使用相同变量。
 
 ## 验证
 
@@ -126,4 +135,4 @@ python3 -m unittest -v test_switch.py test_tmux.py
 
 测试通过临时配置直接启动真实 `codex exec`，由本地 HTTP/SSE 接口验证模型和认证，不使用真实密钥或外部模型服务。
 
-tmux 测试使用独立 socket、临时 HOME 和模拟任务，验证 F12、中文输入、多行粘贴、断线重连、会话选择和卸载保留任务，不操作已有会话。
+tmux 测试使用独立 socket、临时 HOME 和模拟任务，验证 F12、中文输入、多行粘贴、断线重连、鼠标切换窗口、配置热加载、会话选择和卸载保留任务。安装测试同时覆盖下载失败、脚本校验、已有命令备份和自定义安装目录。
