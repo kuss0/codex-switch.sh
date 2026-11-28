@@ -95,6 +95,33 @@ cs_toml_escape() {
   printf '%s' "$value"
 }
 
+cs_toml_unescape() {
+  local value output char escaped index
+  value="$1"
+  output=""
+  for ((index = 0; index < ${#value}; index++)); do
+    char="${value:index:1}"
+    if [[ "$char" != \\ ]]; then
+      output+="$char"
+      continue
+    fi
+
+    ((index += 1))
+    [ "$index" -lt "${#value}" ] || return 1
+    escaped="${value:index:1}"
+    case "$escaped" in
+      b) output+=$'\b' ;;
+      t) output+=$'\t' ;;
+      n) output+=$'\n' ;;
+      f) output+=$'\f' ;;
+      r) output+=$'\r' ;;
+      '"'|\\) output+="$escaped" ;;
+      *) return 1 ;;
+    esac
+  done
+  printf '%s' "$output"
+}
+
 cs_profile_file() {
   local name
   name="$1"
@@ -113,6 +140,57 @@ cs_secret_is_legacy() {
   [ -f "$secret_file" ] || return 1
   IFS= read -r line < "$secret_file" || return 1
   [[ "$line" == export\ CODEX_SWITCH_API_KEY=* || "$line" == export\ OPENAI_API_KEY=* ]]
+}
+
+cs_profile_value() {
+  local profile_file value_name line provider_id in_root in_provider encoded assignment_pattern
+  local -a profile_lines
+  profile_file="$1"
+  value_name="$2"
+  assignment_pattern='[[:space:]]*=[[:space:]]*"(([^"\\]|\\.)*)"[[:space:]]*(#.*)?$'
+  [ -f "$profile_file" ] || return 1
+  mapfile -t profile_lines < "$profile_file"
+
+  provider_id=""
+  in_root="true"
+  for line in "${profile_lines[@]}"; do
+    if [[ "$line" =~ ^[[:space:]]*\[ ]]; then
+      in_root="false"
+    elif [ "$in_root" = "true" ] && [[ "$line" =~ ^[[:space:]]*model_provider${assignment_pattern} ]]; then
+      provider_id="$(cs_toml_unescape "${BASH_REMATCH[1]}")" || return 1
+      break
+    fi
+  done
+  [ -n "$provider_id" ] || return 1
+
+  in_provider="false"
+  for line in "${profile_lines[@]}"; do
+    if [[ "$line" =~ ^[[:space:]]*\[ ]]; then
+      if [[ "$line" =~ ^[[:space:]]*\[model_providers\.([A-Za-z0-9_-]+)\][[:space:]]*(#.*)?$ ]] && [ "${BASH_REMATCH[1]}" = "$provider_id" ]; then
+        in_provider="true"
+      else
+        in_provider="false"
+      fi
+    elif [ "$in_provider" = "true" ] && [[ "$line" =~ ^[[:space:]]*${value_name}${assignment_pattern} ]]; then
+      encoded="${BASH_REMATCH[1]}"
+      cs_toml_unescape "$encoded"
+      return "$?"
+    fi
+  done
+  return 1
+}
+
+cs_store_secret() {
+  local name token secret_file tmp_secret
+  name="$1"
+  token="$2"
+  secret_file="$(cs_secret_file "$name")"
+  tmp_secret="$(mktemp "${secret_file}.tmp.XXXXXX")" || return 1
+  if ! (umask 077; printf '%s\n' "$token" > "$tmp_secret") || ! chmod 600 "$tmp_secret" || ! mv -f -- "$tmp_secret" "$secret_file"; then
+    rm -f -- "$tmp_secret"
+    cs_die 'Could not replace stored API Key.'
+    return 1
+  fi
 }
 
 cs_current_name() {
@@ -169,7 +247,7 @@ cs_restore() {
 }
 
 cs_add() {
-  local name base_url wire_api token provider_id profile_file secret_file keep_existing tmp_profile
+  local name base_url default_base_url stored_base_url wire_api token stored_token stored_env_key secret_fallback provider_id profile_file secret_file keep_existing tmp_profile
 
   cs_ensure_dirs
 
@@ -192,10 +270,23 @@ cs_add() {
   keep_existing="false"
 
   base_url="${CODEX_SWITCH_BASE_URL:-}"
-  if [ -z "$base_url" ] && cs_can_prompt; then
-    cs_read "API 地址 [https://cpa.openi.eu.org/v1]: " base_url
+  stored_base_url=""
+  stored_token=""
+  stored_env_key=""
+  secret_fallback="false"
+  if [ -f "$profile_file" ]; then
+    stored_base_url="$(cs_profile_value "$profile_file" base_url 2>/dev/null || true)"
+    stored_token="$(cs_profile_value "$profile_file" experimental_bearer_token 2>/dev/null || true)"
+    stored_env_key="$(cs_profile_value "$profile_file" env_key 2>/dev/null || true)"
   fi
-  base_url="${base_url:-https://cpa.openi.eu.org/v1}"
+  if [ -f "$secret_file" ] && { [ ! -f "$profile_file" ] || [[ "$stored_env_key" = CODEX_SWITCH_API_KEY || "$stored_env_key" = OPENAI_API_KEY ]]; }; then
+    secret_fallback="true"
+  fi
+  default_base_url="${base_url:-${stored_base_url:-https://cpa.openi.eu.org/v1}}"
+  if [ -z "${CODEX_SWITCH_BASE_URL:-}" ] && cs_can_prompt; then
+    cs_read "API 地址 [$default_base_url]: " base_url
+  fi
+  base_url="${base_url:-$default_base_url}"
 
   wire_api="${CODEX_SWITCH_WIRE_API:-}"
   wire_api="${wire_api:-responses}"
@@ -214,13 +305,13 @@ cs_add() {
   fi
 
   if [ -z "$token" ]; then
-    if [ -f "$secret_file" ] && cs_can_prompt; then
-      cs_read "API Key（可见输入，留空保留原 Key）: " token
+    if [ -n "$stored_token" ] || [ "$secret_fallback" = "true" ]; then
+      if cs_can_prompt; then
+        cs_read "API Key（可见输入，留空保留原 Key）: " token
+      fi
       [ -z "$token" ] && keep_existing="true"
     elif cs_can_prompt; then
       cs_read "API Key（可见输入）: " token
-    elif [ -f "$secret_file" ]; then
-      keep_existing="true"
     fi
   fi
 
@@ -234,13 +325,17 @@ cs_add() {
     return 1
   fi
 
-  if [ "$keep_existing" = "true" ] && cs_secret_is_legacy "$secret_file"; then
+  if [ "$keep_existing" = "true" ] && [ -z "$stored_token" ] && cs_secret_is_legacy "$secret_file"; then
     cs_die "Token file uses the old shell format. Re-run cxadd $name and enter the token again."
     return 1
   fi
 
   if [ "$keep_existing" = "true" ]; then
-    token="$(< "$secret_file")"
+    if [ -n "$stored_token" ]; then
+      token="$stored_token"
+    else
+      token="$(< "$secret_file")"
+    fi
   fi
   if [ -z "$token" ] || [[ "$token" == *$'\n'* || "$token" == *$'\r'* ]]; then
     cs_die 'Token must be a nonempty single line.'
@@ -269,10 +364,7 @@ EOF
 
   chmod 600 "$profile_file" 2>/dev/null || true
 
-  if [ "$keep_existing" != "true" ]; then
-    (umask 077; printf '%s\n' "$token" > "$secret_file") || return 1
-    chmod 600 "$secret_file" 2>/dev/null || true
-  fi
+  cs_store_secret "$name" "$token" || return 1
 
   echo "Saved profile: $name"
   cs_use "$name"
@@ -306,12 +398,19 @@ cs_use() {
 }
 
 cs_save() {
-  local name
+  local name config_file profile_file token
   name="${1:-}"
   cs_validate_profile "$name" || return "$?"
-  [ -f "$(cs_home)/config.toml" ] || { cs_die 'No config.toml to save.'; return 1; }
+  config_file="$(cs_home)/config.toml"
+  profile_file="$(cs_profile_file "$name")"
+  [ -f "$config_file" ] || { cs_die 'No config.toml to save.'; return 1; }
   cs_ensure_dirs
-  cs_copy_config "$(cs_home)/config.toml" "$(cs_profile_file "$name")" || return 1
+  cs_copy_config "$config_file" "$profile_file" || return 1
+  if token="$(cs_profile_value "$config_file" experimental_bearer_token 2>/dev/null)"; then
+    cs_store_secret "$name" "$token" || return 1
+  else
+    rm -f -- "$(cs_secret_file "$name")"
+  fi
   echo "Saved complete current configuration as: $name"
 }
 

@@ -69,6 +69,48 @@ class SwitchTests(unittest.TestCase):
         data = self.config()
         self.assertEqual(data['model_providers'][data['model_provider']]['experimental_bearer_token'], 'offline-test-token')
 
+    def test_edit_keeps_profile_address_and_token_when_inputs_are_empty(self):
+        self.switch('add', 'one')
+        (self.home / 'profile-secrets/one.env').write_text('export OPENAI_API_KEY=stale-token\n')
+        self.env.pop('CODEX_SWITCH_TOKEN')
+        self.env.pop('CODEX_SWITCH_BASE_URL')
+        self.switch('add', 'one')
+        data = self.config()
+        provider = data['model_providers'][data['model_provider']]
+        self.assertEqual(provider['base_url'], 'http://127.0.0.1:9/v1')
+        self.assertEqual(provider['experimental_bearer_token'], 'offline-test-token')
+
+    def test_save_refreshes_secret_sidecar_from_current_config(self):
+        self.switch('add', 'one')
+        config_path = self.home / 'config.toml'
+        config_path.write_text(config_path.read_text().replace('http://127.0.0.1:9/v1', 'http://127.0.0.1:10/v1').replace('offline-test-token', 'new-config-token'))
+        self.switch('save', 'one')
+        self.env.pop('CODEX_SWITCH_TOKEN')
+        self.env.pop('CODEX_SWITCH_BASE_URL')
+        self.switch('add', 'one')
+        data = self.config()
+        provider = data['model_providers'][data['model_provider']]
+        self.assertEqual(provider['base_url'], 'http://127.0.0.1:10/v1')
+        self.assertEqual(provider['experimental_bearer_token'], 'new-config-token')
+        self.assertEqual((self.home / 'profile-secrets/one.env').read_text(), 'new-config-token\n')
+
+    def test_save_without_token_removes_stale_secret(self):
+        self.switch('add', 'one')
+        (self.home / 'config.toml').write_text(self.original)
+        self.switch('save', 'one')
+        self.assertFalse((self.home / 'profile-secrets/one.env').exists())
+        self.assertEqual((self.home / 'one.config.toml').read_text(), self.original)
+
+    def test_legacy_profile_retains_plain_token_when_recreated(self):
+        self.switch('add', 'one')
+        path = self.home / 'one.config.toml'
+        path.write_text(path.read_text().replace('experimental_bearer_token = "offline-test-token"', 'env_key = "CODEX_SWITCH_API_KEY"'))
+        self.env.pop('CODEX_SWITCH_TOKEN')
+        self.env.pop('CODEX_SWITCH_BASE_URL')
+        self.switch('add', 'one')
+        provider = self.config()['model_providers']['proxy_one']
+        self.assertEqual(provider['experimental_bearer_token'], 'offline-test-token')
+
     def test_legacy_profile_rejected_and_recreated(self):
         self.switch('add', 'one')
         path = self.home / 'one.config.toml'
@@ -144,6 +186,13 @@ class SwitchTests(unittest.TestCase):
         data = self.config()
         self.assertNotIn('model', data)
         self.assertEqual(data['model_providers'][data['model_provider']]['experimental_bearer_token'], self.env['CODEX_SWITCH_TOKEN'])
+        path = self.home / 'one.config.toml'
+        path.write_text(path.read_text().replace('experimental_bearer_token = ', 'experimental_bearer_token = ', 1).rstrip() + ' # "quoted comment"\n')
+        expected_token = self.env.pop('CODEX_SWITCH_TOKEN')
+        self.env.pop('CODEX_SWITCH_BASE_URL')
+        self.switch('add', 'one')
+        provider = self.config()['model_providers']['proxy_one']
+        self.assertEqual(provider['experimental_bearer_token'], expected_token)
 
     def test_menu_defaults_api_address_and_shows_key_while_typing(self):
         env = {k: v for k, v in self.env.items() if not k.startswith('CODEX_SWITCH_')}
@@ -167,18 +216,18 @@ class SwitchTests(unittest.TestCase):
         try:
             answer('选择 [0-9]: ', '1')
             answer('Profile name: ', 'interactive')
-            answer('API 地址 [https://cpa.openi.eu.org/v1]: ', '')
+            answer('API 地址 [https://cpa.openi.eu.org/v1]: ', 'https://api.example.test/v1')
             answer('API Key（可见输入）: ', 'visible-interactive-key')
             answer('Ready: run codex directly', '1')
             answer('Profile name: ', 'interactive')
-            answer('API 地址 [https://cpa.openi.eu.org/v1]: ', '')
+            answer('API 地址 [https://api.example.test/v1]: ', '')
             answer('API Key（可见输入，留空保留原 Key）: ', '')
             answer('Ready: run codex directly', '0')
             proc.wait(timeout=8)
             self.assertEqual(proc.returncode, 0)
             data = self.config()
             provider = data['model_providers'][data['model_provider']]
-            self.assertEqual(provider['base_url'], 'https://cpa.openi.eu.org/v1')
+            self.assertEqual(provider['base_url'], 'https://api.example.test/v1')
             self.assertEqual(provider['experimental_bearer_token'], 'visible-interactive-key')
             self.assertIn(b'visible-interactive-key', captured)
             self.assertNotIn(b'Model', captured)
