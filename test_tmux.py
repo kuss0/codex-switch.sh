@@ -12,6 +12,7 @@ import tempfile
 import termios
 import threading
 import time
+import tomllib
 import unittest
 
 REPO = Path(__file__).resolve().parent
@@ -88,6 +89,112 @@ class InstallerTests(unittest.TestCase):
         return subprocess.run(['bash', '-c', 'source <(sed \'$d\' "$1/install.sh"); ' + body,
                                'test', str(REPO)], env=env or self.env,
                               capture_output=True, text=True, timeout=15)
+
+    def test_each_menu_choice_and_flag_runs_only_its_selected_steps(self):
+        stubs = '''
+install_packages() { echo packages >> "$HOME/calls"; }
+install_node() { echo node >> "$HOME/calls"; }
+install_clis() { echo codex >> "$HOME/calls"; }
+install_switcher() { echo "switcher $*" >> "$HOME/calls"; }
+maybe_install_tmux() { echo "tmux ${CODEX_SWITCH_INSTALL_TMUX:-}" >> "$HOME/calls"; }
+maybe_create_profiles() { echo configure >> "$HOME/calls"; }
+can_prompt() { return 0; }
+prompt() { printf -v "$2" '%s' "$TEST_CHOICE"; }
+'''
+        installation = ['packages', 'node', 'codex']
+        cases = [
+            ('1', '--codex-only', installation),
+            ('2', '--configure-only', ['switcher ', 'configure']),
+            ('3', '--install-configure', installation + ['switcher ', 'configure']),
+            ('4', '--all', installation + ['switcher ', 'tmux 1', 'configure']),
+            ('5', '--tmux-only', ['switcher --no-config', 'tmux 1']),
+            ('', '--install-configure', installation + ['switcher ', 'configure']),
+            ('0', '', []),
+        ]
+        log = self.home / 'calls'
+        for choice, flag, expected in cases:
+            commands = ['main']
+            if flag:
+                commands.append('main ' + flag)
+            for command in commands:
+                with self.subTest(choice=choice, command=command):
+                    log.unlink(missing_ok=True)
+                    env = dict(self.env, TEST_CHOICE=choice, CODEX_SWITCH_INSTALL_TMUX='0')
+                    result = self.install_functions(stubs + command, env)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(log.read_text().splitlines() if log.exists() else [], expected)
+                    if expected:
+                        self.assertIn('source ~/.bashrc\nhash -r', result.stdout)
+
+    def test_menu_reprompts_invalid_choice_and_cancels_on_eof(self):
+        result = self.install_functions('''
+can_prompt() { return 0; }
+prompt() { read -r "$2"; }
+install_switcher() { echo unexpected-install; }
+main <<< $'invalid\\n0'
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('请输入 0 到 5', result.stdout)
+        self.assertNotIn('unexpected-install', result.stdout)
+        result = self.install_functions('can_prompt() { return 0; }; main </dev/null')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.home / '.local').exists())
+
+    def test_tmux_only_does_not_create_or_replace_codex_configuration(self):
+        self.script('tmux', 'printf "tmux 3.5a\\n"\n')
+        for command in ('fnm', 'node', 'npm', 'apt-get', 'dnf', 'yum', 'apk'):
+            self.script(command, 'echo unexpected-package-install >&2\nexit 83\n')
+        config = self.home / '.codex/config.toml'
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                if existing:
+                    config.parent.mkdir()
+                    config.write_text('model = "personal-model"\n# personal configuration\n')
+                before = config.read_bytes() if existing else None
+                result = subprocess.run(['bash', str(REPO / 'install.sh'), '--tmux-only'],
+                                        env=self.env, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('unexpected-package-install', result.stderr)
+                if existing:
+                    self.assertEqual(config.read_bytes(), before)
+                    self.assertEqual(list(config.parent.iterdir()), [config])
+                else:
+                    self.assertFalse(config.parent.exists())
+                result = subprocess.run(['bash', '-c', 'source "$HOME/.bashrc"; hash -r; zz --help'],
+                                        env=self.env, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('F12', result.stdout)
+
+    def test_piped_installer_reads_menu_and_visible_key_from_terminal(self):
+        command = ['bash', '-c', 'cat "$1/install.sh" | bash', 'test', str(REPO)]
+        client = Client(command, self.env)
+        position = 0
+
+        def answer(prompt, value):
+            nonlocal position
+            marker = prompt.encode()
+            wait_for(lambda: client.output.find(marker, position) >= 0)
+            position = client.output.find(marker, position) + len(marker)
+            client.send((value + '\n').encode())
+
+        try:
+            answer('选择 [0-5，默认 3]: ', '2')
+            answer('Codex 配置名称 [default]: ', '')
+            answer('API 地址 [https://cpa.openi.eu.org/v1]: ', '')
+            answer('API Key（可见输入）: ', 'visible-install-test-key')
+            client.process.wait(timeout=15)
+            self.assertEqual(client.process.returncode, 0, client.output.decode(errors='replace'))
+            data = tomllib.loads((self.home / '.codex/config.toml').read_text())
+            provider = data['model_providers'][data['model_provider']]
+            self.assertEqual(provider['base_url'], 'https://cpa.openi.eu.org/v1')
+            self.assertEqual(provider['experimental_bearer_token'], 'visible-install-test-key')
+            self.assertIn(b'visible-install-test-key', client.output)
+            self.assertNotIn('model', data)
+        finally:
+            if client.process.poll() is None:
+                client.process.kill()
+                client.process.wait()
+            client.close()
 
     def test_optional_tmux_defaults_to_no_and_accepts_explicit_opt_in(self):
         dispatch = self.home / 'dispatch'

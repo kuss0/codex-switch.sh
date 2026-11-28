@@ -6,20 +6,46 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kuss0/codex-switch.sh/main/install.sh | bash
+source ~/.bashrc
+hash -r
 ```
 
-安装器使用当前 Node.js LTS，并从官方 npm 源安装 `@openai/codex@latest`，显示实际命令路径、版本和官方最新稳定版。重复运行可更新已安装的脚本。
+安装结束后，在当前 Bash 中执行上面的 `source ~/.bashrc` 和 `hash -r`，加载 Node.js、Codex 和脚本入口。通过管道运行的安装器在子进程中设置环境，当前终端需要执行这两条命令。
+
+交互安装提供五项选择，回车默认选择 `3`，输入 `0` 退出。
+
+| 选项 | 操作 | 命令行参数 |
+| --- | --- | --- |
+| 1 | 仅安装 Codex | `--codex-only` |
+| 2 | 仅配置 Codex，安装配置工具并填写 API | `--configure-only` |
+| 3 | 安装并配置 Codex | `--install-configure` |
+| 4 | 安装并配置 Codex，加装 tmux 和 zz 保活入口 | `--all` |
+| 5 | 仅安装 tmux，包含 zz 保活入口 | `--tmux-only` |
+
+选项 `5` 安装 tmux、`zz` 和配套工具，`zz` 创建会话时会调用已有的 Codex。选项 `2`、`3`、`4` 会进入 API 配置流程。
+
+安装 Codex 时使用当前 Node.js LTS，并从官方 npm 源安装 `@openai/codex@latest`，显示实际命令路径、版本和官方最新稳定版。重复运行可更新已安装的脚本。
+
+也可以用参数直接选择，例如安装并配置 Codex 和 tmux。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kuss0/codex-switch.sh/main/install.sh | bash -s -- --all
+source ~/.bashrc
+hash -r
+```
 
 已安装的机器可以只更新切换脚本和 `zz`，然后加载新版 tmux 配置。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kuss0/codex-switch.sh/main/install.sh | bash -s -- --switcher-only
+source ~/.bashrc
+hash -r
 ~/.local/bin/zz reload
 ```
 
 安装器会先下载全部文件并检查 Bash 语法，下载失败、空文件或语法错误时保留已安装版本。
 
-**tmux 可选安装，默认不安装。** 交互时选择是否启用断线保活，也可之后运行 `codex-switch tmux-install`。跳过 tmux 后照常直接运行 `codex`。
+tmux 为可选组件，安装菜单的 `4`、`5` 会安装，也可之后运行 `codex-switch tmux-install`。
 
 ## 配置并启动
 
@@ -29,7 +55,9 @@ curl -fsSL https://raw.githubusercontent.com/kuss0/codex-switch.sh/main/install.
 ~/.local/bin/codex-switch
 ```
 
-选择 `1` 后输入配置名称、API 地址和 API Key。API 地址预填 `https://cpa.openi.eu.org/v1`，回车直接采用，也可以输入其他地址。Key **可见输入**，便于核对，保存后立即启用；编辑已有方案时 Key 留空保留原值。
+选择 `1` 后输入配置名称、API 地址和 API Key。API 地址预填 `https://cpa.openi.eu.org/v1`，回车直接采用，也可以输入其他地址。Key **明文显示**，输入和粘贴时都能核对，保存后立即启用。编辑已有方案时 Key 留空保留原值。
+
+这是个人自用脚本，新建配置采用本机的 `model_reasoning_effort = "high"`、`approvals_reviewer = "user"` 和 `service_tier = "fast"`。
 
 脚本不询问或指定模型，生成的配置不写 `model`，使用 Codex 原生默认模型。旧的 `CODEX_SWITCH_MODEL` 环境变量不再使用。
 
@@ -113,7 +141,18 @@ codex
 
 仅支持 `responses`，不再询问 Wire API。token 文件应只包含一行 API Key。
 
-非交互安装默认跳过 tmux。显式启用可使用 `CODEX_SWITCH_INSTALL_TMUX=1 bash install.sh`，禁用可使用 `CODEX_SWITCH_INSTALL_TMUX=0`。这些选项不影响 API 配置；`AI_SWITCH_SKIP_PROFILE=1` 可跳过首次配置流程。
+非交互安装可用表中的参数直接选择操作。配置时通过 `CODEX_SWITCH_PROFILE` 指定方案名称，配合 API 地址和 token 文件传入配置。
+
+```bash
+CODEX_SWITCH_PROFILE=default \
+CODEX_SWITCH_BASE_URL=https://cpa.openi.eu.org/v1 \
+CODEX_SWITCH_TOKEN_FILE=/path/to/token \
+bash install.sh --install-configure
+source ~/.bashrc
+hash -r
+```
+
+无参数且无交互终端时，保留原有安装流程，安装 Codex 和配置工具，默认跳过 tmux。此时 `CODEX_SWITCH_INSTALL_TMUX=1` 可启用 tmux，`CODEX_SWITCH_INSTALL_TMUX=0` 可禁用。显式参数和菜单选择以所选操作为准。`AI_SWITCH_SKIP_PROFILE=1` 可跳过 API 配置流程。
 
 ## 卸载
 

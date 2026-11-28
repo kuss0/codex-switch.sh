@@ -253,8 +253,9 @@ cs_add() {
   cat > "$tmp_profile" <<EOF
 # Complete configuration managed by codex-switch.
 model_provider = "$provider_id"
-approval_policy = "on-request"
-sandbox_mode = "workspace-write"
+model_reasoning_effort = "high"
+approvals_reviewer = "user"
+service_tier = "fast"
 
 [model_providers.$provider_id]
 name = "$(cs_toml_escape "$name")"
@@ -455,8 +456,9 @@ cs_init_config() {
 
   cat > "$config" <<'EOF'
 # Codex base config. codex-switch replaces this with a complete saved config.
-approval_policy = "on-request"
-sandbox_mode = "workspace-write"
+model_reasoning_effort = "high"
+approvals_reviewer = "user"
+service_tier = "fast"
 EOF
   chmod 600 "$config" 2>/dev/null || true
   echo "Created config: $config"

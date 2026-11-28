@@ -130,6 +130,7 @@ install_clis() {
 
 install_switcher() (
   local script_source script_dir local_dir stage_dir backup_dir source_name
+  local config_mode="${1:-}"
   script_source="${BASH_SOURCE[0]:-}"
   local_dir=""
 
@@ -145,8 +146,11 @@ install_switcher() (
     esac
   fi
 
-  mkdir -p "$SHARE_DIR" "$BIN_DIR" "$HOME/.codex"
-  chmod 700 "$HOME/.codex" 2>/dev/null || true
+  mkdir -p "$SHARE_DIR" "$BIN_DIR"
+  if [ "$config_mode" != --no-config ]; then
+    mkdir -p "$HOME/.codex"
+    chmod 700 "$HOME/.codex" 2>/dev/null || true
+  fi
   stage_dir="$(mktemp -d "$SHARE_DIR/.install.XXXXXX")"
   trap 'rm -rf -- "$stage_dir"' EXIT
 
@@ -197,10 +201,11 @@ install_switcher() (
   ln -sfn "$SHARE_DIR/codex-switch.sh" "$BIN_DIR/codex-switch"
   ln -sfn "$SHARE_DIR/zz.sh" "$BIN_DIR/zz"
 
-  # Keep legacy paths working.
-  ln -sfn "$SHARE_DIR/codex-switch.sh" "$HOME/.codex/codex-switch.sh"
-
-  "$SHARE_DIR/ai-switch.sh" init-config
+  if [ "$config_mode" != --no-config ]; then
+    # Keep legacy paths working.
+    ln -sfn "$SHARE_DIR/codex-switch.sh" "$HOME/.codex/codex-switch.sh"
+    "$SHARE_DIR/ai-switch.sh" init-config
+  fi
   CODEX_SWITCH_BIN_DIR="$BIN_DIR" CODEX_SWITCH_SCRIPT_PATH="$SHARE_DIR/codex-switch.sh" "$SHARE_DIR/ai-switch.sh" install-shell "$HOME/.bashrc"
 )
 
@@ -222,7 +227,7 @@ maybe_install_tmux() {
 }
 
 maybe_create_profiles() {
-  local answer name
+  local name
 
   if [ "${AI_SWITCH_SKIP_PROFILE:-0}" = "1" ]; then
     return 0
@@ -231,57 +236,102 @@ maybe_create_profiles() {
   # Non-interactive codex profile
   if [ -n "${CODEX_SWITCH_PROFILE:-}" ]; then
     "$SHARE_DIR/codex-switch.sh" add "$CODEX_SWITCH_PROFILE"
-  fi
-
-  if [ -n "${CODEX_SWITCH_PROFILE:-}" ]; then
-    return 0
+    return
   fi
 
   if ! can_prompt; then
     return 0
   fi
 
-  prompt "Create first Codex profile now? [Y/n]: " answer
-  case "$answer" in
-    n|N|no|NO|No) ;;
-    *)
-      prompt "Codex profile name [default]: " name
-      name="${name:-default}"
-      "$SHARE_DIR/codex-switch.sh" add "$name"
-      ;;
-  esac
+  prompt 'Codex 配置名称 [default]: ' name
+  name="${name:-default}"
+  "$SHARE_DIR/codex-switch.sh" add "$name"
+}
 
+usage() {
+  msg 'Usage: install.sh [--codex-only|--configure-only|--install-configure|--all|--tmux-only|--switcher-only]'
 }
 
 main() {
-  if [ "${1:-}" = --switcher-only ] && [ "$#" -eq 1 ]; then
-    install_switcher
-    msg 'Updated the switcher and zz. Run ~/.local/bin/zz reload to apply tmux settings to a running server.'
-    msg 'Reload ~/.bashrc or open a new shell for shell helpers.'
-    return
-  fi
-  if [ "$#" -ne 0 ]; then
-    msg 'Usage: install.sh [--switcher-only]' >&2
+  local mode choice legacy_install=0
+  if [ "$#" -gt 1 ]; then
+    usage >&2
     return 2
   fi
-  msg "Installing dependencies..."
-  install_packages || msg "Dependency install skipped or partially failed. Continuing..."
+  mode="${1:-}"
+  case "$mode" in
+    -h|--help) usage; return ;;
+    --codex-only|--configure-only|--install-configure|--all|--tmux-only|--switcher-only) ;;
+    '')
+      if can_prompt; then
+        while :; do
+          msg '请选择安装方式'
+          msg '1) 仅安装 Codex'
+          msg '2) 仅配置 Codex'
+          msg '3) 安装并配置 Codex'
+          msg '4) 安装并配置 Codex + tmux'
+          msg '5) 仅安装 tmux（含 zz 保活入口）'
+          msg '0) 退出'
+          prompt '选择 [0-5，默认 3]: ' choice
+          case "${choice:-3}" in
+            1) mode=--codex-only; break ;;
+            2) mode=--configure-only; break ;;
+            3) mode=--install-configure; break ;;
+            4) mode=--all; break ;;
+            5) mode=--tmux-only; break ;;
+            0) return ;;
+            *) msg '请输入 0 到 5。' ;;
+          esac
+        done
+      else
+        mode=--install-configure
+        legacy_install=1
+      fi
+      ;;
+    *) usage >&2; return 2 ;;
+  esac
 
-  install_node
-  install_clis
-  install_switcher
-  maybe_install_tmux
-  maybe_create_profiles
+  case "$mode" in
+    --codex-only|--install-configure|--all)
+      msg 'Installing dependencies...'
+      install_packages || msg 'Dependency install skipped or partially failed. Continuing...'
+      install_node
+      install_clis
+      ;;
+  esac
+  case "$mode" in
+    --codex-only)
+      msg 'Codex 安装完成。运行 codex 启动。'
+      ;;
+    --configure-only|--install-configure|--all)
+      install_switcher
+      if [ "$mode" = --all ]; then
+        CODEX_SWITCH_INSTALL_TMUX=1 maybe_install_tmux
+      elif [ "$legacy_install" -eq 1 ]; then
+        maybe_install_tmux
+      fi
+      maybe_create_profiles
+      msg 'Codex 配置工具已就绪。运行 codex-switch 管理 API，运行 codex 启动。'
+      ;;
+    --tmux-only)
+      install_switcher --no-config
+      CODEX_SWITCH_INSTALL_TMUX=1 maybe_install_tmux
+      msg 'tmux 和 zz 保活入口安装完成。zz 会调用已有的 Codex。'
+      ;;
+    --switcher-only)
+      install_switcher
+      msg 'Updated the switcher and zz.'
+      printf 'Run %q reload to apply tmux settings to a running server.\n' "$BIN_DIR/zz"
+      ;;
+  esac
 
-  msg ""
-  msg "Codex switcher installed."
-  msg "After adding/selecting a profile, run codex directly. No alias is required."
-  msg "Open a new shell, or run: source ~/.bashrc"
-  msg ""
-  msg "Codex:  cx  cxe  cxadd  cxuse  cxlist  cxwhich  cxrm"
-  msg "Optional keepalive: zz / zz work / zz ls; F12 returns to SSH."
-  msg "Check/update: codex-switch version / codex-switch update"
-  msg "Compatibility: ai-switch / as / asstatus"
+  msg ''
+  msg '请在当前 Bash 中执行以下命令刷新环境'
+  msg 'source ~/.bashrc'
+  msg 'hash -r'
+  if [ "$mode" = --all ] || [ "$mode" = --tmux-only ]; then
+    msg '保活入口 zz / zz work / zz ls，F12 返回 SSH。'
+  fi
 }
 
 main "$@"

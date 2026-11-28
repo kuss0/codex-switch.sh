@@ -45,6 +45,11 @@ class SwitchTests(unittest.TestCase):
         self.assertFalse(provider['requires_openai_auth'])
         self.assertEqual(provider['experimental_bearer_token'], 'offline-test-token')
         self.assertNotIn('env_key', provider)
+        self.assertEqual(data['model_reasoning_effort'], 'high')
+        self.assertEqual(data['approvals_reviewer'], 'user')
+        self.assertEqual(data['service_tier'], 'fast')
+        self.assertNotIn('approval_policy', data)
+        self.assertNotIn('sandbox_mode', data)
         self.assertEqual((self.home / 'config.toml').read_bytes(), (self.home / 'one.config.toml').read_bytes())
         self.assertEqual((self.home / 'config.toml.before-codex-switch').read_text(), self.original)
         self.assertEqual((self.home / 'config.toml').stat().st_mode & 0o777, 0o600)
@@ -146,14 +151,17 @@ class SwitchTests(unittest.TestCase):
         proc = subprocess.Popen(['bash', str(REPO / 'codex-switch.sh')], env=env, stdin=slave, stdout=slave, stderr=slave)
         os.close(slave)
         captured = bytearray()
+        position = 0
 
         def answer(prompt, value):
+            nonlocal position
             deadline = time.monotonic() + 8
             marker = prompt.encode()
-            while marker not in captured:
+            while captured.find(marker, position) < 0:
                 self.assertLess(time.monotonic(), deadline, captured.decode(errors='replace'))
                 if select.select([master], [], [], 0.1)[0]:
                     captured.extend(os.read(master, 4096))
+            position = captured.find(marker, position) + len(marker)
             os.write(master, (value + '\n').encode())
 
         try:
@@ -161,6 +169,10 @@ class SwitchTests(unittest.TestCase):
             answer('Profile name: ', 'interactive')
             answer('API 地址 [https://cpa.openi.eu.org/v1]: ', '')
             answer('API Key（可见输入）: ', 'visible-interactive-key')
+            answer('Ready: run codex directly', '1')
+            answer('Profile name: ', 'interactive')
+            answer('API 地址 [https://cpa.openi.eu.org/v1]: ', '')
+            answer('API Key（可见输入，留空保留原 Key）: ', '')
             answer('Ready: run codex directly', '0')
             proc.wait(timeout=8)
             self.assertEqual(proc.returncode, 0)
